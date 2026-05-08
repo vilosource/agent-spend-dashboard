@@ -829,10 +829,10 @@ gantt
    dateFormat YYYY-MM-DD
    axisFormat %b %d
    section Foundation
-   0.3.1 service skeleton (express + svelte build)  :p1, 2026-05-12, 2d
-   0.3.2 Postgres migrations + auth tables           :p2, after p1, 1d
+   0.3.1 service skeleton (express + svelte build)  :done, p1, 2026-05-08, 1d
+   0.3.2 Postgres migrations + auth tables           :done, p2, 2026-05-08, 1d
    section Auth
-   0.3.3 OIDC flow against Dex                       :p3, after p2, 3d
+   0.3.3 OIDC flow against Dex                       :active, p3, after p2, 3d
    0.3.4 GitHub adapter                              :p4, after p3, 1d
    0.3.5 LAB_NO_AUTH escape hatch                    :p5, after p3, 1d
    0.3.6 JWT minting + api_tokens table              :p6, after p3, 1d
@@ -882,4 +882,9 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 
 ---
 
-**Document status:** ready for review. Implementation phased delivery in §11. The first PR lands the service skeleton (phase 0.3.1); each subsequent phase ships as its own PR.
+**Document status:** under active implementation. Phased delivery in §11:
+- ✅ 0.3.1 service skeleton — merged to `main` ([`345c2cc`](https://github.com/vilosource/agent-spend-dashboard/commit/345c2cc) on branch, [`2ef27f9`](https://github.com/vilosource/agent-spend-dashboard/commit/2ef27f9) merge)
+- ✅ 0.3.2 auth tables — merged to `main` ([`4e8520a`](https://github.com/vilosource/agent-spend-dashboard/commit/4e8520a) on branch, [`7595b01`](https://github.com/vilosource/agent-spend-dashboard/commit/7595b01) merge)
+- 🟡 0.3.3 OIDC against Dex — next
+
+Each subsequent phase ships as its own PR.

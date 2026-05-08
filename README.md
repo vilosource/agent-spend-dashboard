@@ -6,13 +6,24 @@ This repository is the **reference dashboard server** for the [scope-and-deploym
 
 ## Status
 
-**Lab + dashboards working.** The Compose stack (Postgres + OTel Collector + bridge + Grafana with three pre-built dashboards + API skeleton) and the synthetic emitter all live in this repo. End-to-end verified: `make lab && make seed` brings up a working local environment in under a minute and shows real graphs at <http://localhost:7000>.
+**Phase 0.3.2 shipped.** The Compose stack (Postgres + OTel Collector + bridge + Grafana with three pre-built dashboards + API service skeleton) and the synthetic emitter all live in this repo. End-to-end verified: `make lab && make seed` brings up a working local environment in under a minute and shows real graphs at <http://localhost:7000> and a placeholder API at <http://localhost:7080>.
 
-What's not yet implemented:
+What's done:
 
-- The pi-test container (§5 of the lab strategy) — next PR.
-- Scenarios + `make e2e` (§9–10) — follow-up.
-- The custom SPA + API (per-user RBAC, finance exports) — phase 0.3. Grafana covers the org/team views; the SPA covers the things Grafana can't.
+- **0.1** Lab Compose stack + bridge + seeder
+- **0.2** Three Grafana dashboards (Org Overview, By Team, Burn Rate)
+- **0.3.1** API service skeleton: Express on `:7080` with `/health` + placeholder `/`
+- **0.3.2** Auth tier schema: `users`, `teams`, `api_tokens`, `budgets`, `audit_log` (no code reads them yet — lands in 0.3.6)
+
+What's next (per [`docs/design/api-and-spa-DESIGN.md`](docs/design/api-and-spa-DESIGN.md) §11):
+
+- **0.3.3** OIDC against Dex (~3 days) — first real auth flow
+- **0.3.4–0.3.6** GitHub adapter, lab escape hatch, JWT minting + token verification
+- **0.3.7–0.3.8** OTLP `/v1/traces` ingest on the API; sunset the bridge
+- **0.3.9** SPA: Login + `/me` page ("I can see my own data" milestone)
+- **0.3.10–0.3.15** Token management, /team and /admin pages, drilldowns, audit export, device-flow login, `pi-usage` CLI
+
+Roadmap details and status of each phase: [`docs/design/api-and-spa-DESIGN.md`](docs/design/api-and-spa-DESIGN.md) §11.
 
 ## What's here today
 
