@@ -1,0 +1,46 @@
+# Quality gate: lint, typecheck, dependency-cruiser, boundary, tests.
+
+name: CI
+
+on:
+   push:
+      branches: [main]
+   pull_request:
+
+concurrency:
+   group: ci-${{ github.ref }}
+   cancel-in-progress: true
+
+jobs:
+   check:
+      name: Lint, typecheck, depgraph, tests
+      runs-on: ubuntu-latest
+      timeout-minutes: 10
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+         - uses: actions/setup-node@v4
+           with:
+              node-version: "20.18"
+              cache: npm
+         - name: Install dependencies
+           run: npm install --no-audit --no-fund
+         - name: Biome lint + format check
+           run: npm run lint:ci
+         - name: TypeScript build
+           run: npm run typecheck
+         - name: dependency-cruiser
+           run: npm run depgraph
+         - name: Vitest
+           run: npm run test
+
+   test-coverage:
+      name: Source changes ship with tests
+      runs-on: ubuntu-latest
+      if: github.event_name == 'pull_request'
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+         - run: bash scripts/check-tests-with-source.sh origin/${{ github.base_ref }}

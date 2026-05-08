@@ -42,6 +42,27 @@ services:
       # and on the collector's own log output to confirm readiness. The Makefile's
       # wait-healthy target probes http://localhost:13133/ from the host.
 
+   api:
+      # Agent Spend API + SPA + OTLP ingest (per docs/design/api-and-spa-DESIGN.md).
+      # Phase 0.3.1 — only /health and a placeholder / are implemented;
+      # /api/*, /auth/*, /v1/traces land in subsequent phases.
+      build:
+         context: ../..
+         dockerfile: packages/api/Dockerfile
+      restart: unless-stopped
+      environment:
+         PORT: 8080
+         PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      depends_on:
+         postgres:
+            condition: service_healthy
+      healthcheck:
+         test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+         interval: 10s
+         timeout: 5s
+         retries: 5
+         start_period: 5s
+
    grafana:
       image: grafana/grafana-oss:11.4.0
       restart: unless-stopped

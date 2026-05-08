@@ -72,3 +72,10 @@ services:
          GF_NEWS_NEWS_FEED_ENABLED: "false"
       ports:
          - "3000:3000"
+
+   # API service — port mapped to host 8090 in the lab to avoid conflict with
+   # other developer-machine services that often grab 8080. The container
+   # internal port stays at 8080.
+   api:
+      ports:
+         - "8090:8080"
