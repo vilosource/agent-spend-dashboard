@@ -12,3 +12,9 @@
 # The CI script itself contains the denylist regexes, which include the
 # patterns we are forbidding elsewhere.
 scripts/check-public-boundary.sh
+
+# README has a single "this is NOT Optiscan's deployment" framing
+# clarifying audience scope. The reference is intentional and clarifies
+# that this repo is the harness-agnostic reference server, not any one
+# organization's private deployment.
+README.md

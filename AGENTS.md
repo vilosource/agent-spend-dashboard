@@ -66,4 +66,4 @@ This repository is **harness-agnostic**. It must not contain logic, attributes, 
 
 ## Decisions log
 
-Settled architectural decisions are recorded append-only in [`docs/strategy/decisions-LOG.md`](docs/strategy/decisions-LOG.md). New decisions go at the bottom; old ones are never edited (corrections are new entries that supersede the old). Reference an existing entry by its date and decision number (e.g. "per D5 in the decisions log") rather than re-arguing the question.
+Settled architectural decisions are recorded append-only in [`docs/strategy/decisions-LOG.md`](docs/strategy/decisions-LOG.md). New decisions go at the bottom; old ones are never edited (corrections are new entries that supersede the old). Reference an existing entry by its date and decision number (e.g. "per D1 in the decisions log") rather than re-arguing the question.

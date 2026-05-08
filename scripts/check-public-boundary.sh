@@ -89,7 +89,7 @@ is_allowlisted() {
 # ----- Tool selection ----------------------------------------------------
 
 if command -v rg >/dev/null 2>&1; then
-  GREP_CMD=(rg --no-heading --line-number --color never --hidden \
+  GREP_CMD=(rg --no-heading --line-number --color never --hidden -i \
     --glob '!.git' \
     --glob '!node_modules' \
     --glob '!dist' \
@@ -99,8 +99,8 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!scripts/check-public-boundary.sh' \
     --glob '!docs/strategy/public-boundary-STRATEGY.md')
 else
-  # Fallback: grep -rPnE
-  GREP_CMD=(grep -rPnE \
+  # Fallback: grep -rPnEi
+  GREP_CMD=(grep -rPnEi \
     --binary-files=without-match \
     --exclude-dir=.git \
     --exclude-dir=node_modules \
