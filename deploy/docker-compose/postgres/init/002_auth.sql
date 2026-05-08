@@ -67,20 +67,29 @@ CREATE INDEX IF NOT EXISTS idx_users_role    ON users(role);
 -- Per-machine tokens. D9: one developer with three machines (laptop, dev VM,
 -- CI runner) gets three tokens, each individually revocable.
 --
--- token_hash: bcrypt of the issued token (cost factor 10). The token itself
--- is shown to the user once at creation and never stored anywhere on the
--- server in plaintext. On verification we bcrypt.compare() against this hash.
+-- BROWSER SESSIONS DO NOT APPEAR HERE (D14). Browser cookies carry the same
+-- JWT format but are stateless — verified by signature alone. Only named,
+-- long-lived machine tokens get a row in this table; the row IS the
+-- revocation primitive.
 --
+-- token_hash: SHA-256 of the issued JWT, hex-encoded (64 chars). NOT bcrypt
+--   (D14 supersedes the original draft of this comment). Tokens are
+--   high-entropy random JWTs (≥ 256 bits); SHA-256 is the right primitive
+--   because it's deterministic — the request path can do
+--   `WHERE token_hash = $1` for an O(1) lookup. Bcrypt's random salt would
+--   force an O(n) bcrypt.compare() per request and break the hot path.
 -- expires_at: 90 days from issuance (forced rotation without being painful).
 -- revoked_at: soft-delete; rows are kept for audit purposes.
 -- last_used_at: for staleness reports / "which tokens haven't been used in 30
---               days, please revoke" admin views.
+--               days, please revoke" admin views. Updated inline per request
+--               in v1 (0.3.6); batching is open question §12 in the design doc,
+--               revisited when 0.3.7 OTLP ingest produces measurable load.
 
 CREATE TABLE IF NOT EXISTS api_tokens (
    id            BIGSERIAL    PRIMARY KEY,
    user_id       BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
    label         TEXT         NOT NULL,           -- e.g. "laptop", "dev-vm", "ci"
-   token_hash    TEXT         NOT NULL,           -- bcrypt(token, cost=10)
+   token_hash    TEXT         NOT NULL,           -- sha256(jwt) hex; see D14
    expires_at    TIMESTAMPTZ  NOT NULL,
    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
    last_used_at  TIMESTAMPTZ,
@@ -93,6 +102,14 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_user_label_active
    ON api_tokens(user_id, label)
+   WHERE revoked_at IS NULL;
+
+-- Hot-path lookup: every authenticated bearer request does
+-- `WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()`.
+-- Partial unique index keeps the index small (revoked rows aren't kept hot)
+-- AND enforces the invariant that no two active tokens share a hash. (D14.)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_token_hash_active
+   ON api_tokens(token_hash)
    WHERE revoked_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id     ON api_tokens(user_id);

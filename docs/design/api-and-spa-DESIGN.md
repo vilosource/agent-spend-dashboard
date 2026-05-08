@@ -193,48 +193,58 @@ The full auth model is in [`docs/strategy/authentication-STRATEGY.md`](../strate
 
 | Concern | Library | Notes |
 |---|---|---|
-| OIDC client (Entra, Google, Okta, Auth0, Cognito, Keycloak, Dex, ...) | [`openid-client`](https://github.com/panva/node-openid-client) | One library, one code path. Discovery via `Issuer.discover()`. |
+| OIDC client (Entra, Google, Okta, Auth0, Cognito, Keycloak, Dex, ...) | [`openid-client`](https://github.com/panva/node-openid-client) v6 | One library, one code path. Functional API: `client.discovery()` returns a `Configuration`. |
 | GitHub OAuth (special case per [auth strategy §4.2](../strategy/authentication-STRATEGY.md)) | small custom adapter (~30 LOC) | After token exchange, `GET https://api.github.com/user` for identity. |
-| JWT minting + validation | [`jose`](https://github.com/panva/jose) | HS256 signing with `JWT_SECRET`. Standard claims: `sub`, `email`, `name`, `role`, `teams`, `machine`, `iat`, `exp`. |
-| Session cookies | [`cookie-session`](https://github.com/expressjs/cookie-session) | `HttpOnly`, `Secure`, `SameSite=Lax`. The cookie carries the same JWT used as a bearer token. |
-| Password hashing for stored token records | `bcrypt` | Per design §5.4 of the original pi-extensions doc. |
+| JWT minting + validation | [`jose`](https://github.com/panva/jose) | HS256 signing with `AGENT_SPEND_JWT_SECRET`. Standard claims: `sub`, `email`, `name`, `role`, `teams`, `machine`, `iat`, `exp`. |
+| Session cookies | `cookie` (parser) + `jose` (mint/verify) | `HttpOnly`, `SameSite=Lax`, `Secure` in prod. Cookie carries the same JWT used as a bearer token. (We don't pull in `cookie-session`; the cookie is stateless and we set/clear it directly.) |
+| Stored-token hashing | `node:crypto` SHA-256 | Tokens are high-entropy random values (HS256-signed JWTs); SHA-256 is the right primitive — deterministic for O(1) row lookup, fast on the request path, and entropy makes brute force infeasible. **Not** bcrypt: bcrypt's random salt makes deterministic lookup impossible (the previous draft of this doc was wrong on this point). See D14. |
 
 ### 3.2 Auth state at the API
+
+Two distinct token shapes live behind one JWT format. **Browser sessions** are stateless: the cookie carries an HS256-signed JWT, the API verifies the signature on each request, and there is no `api_tokens` row. **Machine tokens** (per-device, named, long-lived) DO get a row — the row is what makes them per-device-revocable.
 
 ```
 ┌──────────────────────┐
 │ users                │     created on first OIDC callback;
-│  user_id PK (email)  │     `role` default 'developer'.
-│  display_name        │
-│  team                │
+│  id PK (BIGSERIAL)   │     `role` default 'developer'.
+│  email UNIQUE        │
+│  name                │
 │  role                │
+│  team_id             │
 │  created_at          │
+│  updated_at          │
 │  last_seen_at        │
-│  is_disabled         │
 └──────────────────────┘
        │
-       │ 1..N
+       │ 1..N (machine tokens only)
        ▼
 ┌──────────────────────┐
-│ api_tokens           │     one row per active token.
-│  token_id PK         │     token_hash is bcrypt(JWT).
-│  user_id FK          │     'name' = browser session,
-│  token_hash          │             pi-usage machine,
-│  token_prefix        │             ci-runner, etc.
-│  name                │     last_seen_at updated on each
-│  created_at          │             /v1/traces request.
-│  expires_at          │
-│  revoked_at          │
-│  last_seen_at        │
+│ api_tokens           │     one row per machine token (CLI / CI / install
+│  id PK (BIGSERIAL)   │     one-liner). Browser sessions DO NOT appear here
+│  user_id FK          │     — they're stateless cookies, validated by JWT
+│  token_hash          │     signature alone. (D14.)
+│  label               │
+│  expires_at          │     token_hash = SHA-256(jwt) hex; deterministic so
+│  created_at          │     the request path can look up by hash in O(1).
+│  last_used_at        │     Tokens are high-entropy (HS256 JWTs ≥ 256 bits);
+│  revoked_at          │     SHA-256 with no salt is correct here. (D14.)
 └──────────────────────┘
 ```
 
+**Why browsers don't get rows.** The strategy doc's earlier draft created a row per browser login (one per cookie clear, incognito tab, mobile login...) for the sake of per-device revocation. Net effect: write amplification on every login, accumulating dead rows after the 24h TTL, and no real value — browser sessions aren't named, individually meaningful, or worth revoking individually. If a user wants to "log everywhere out", we rotate `AGENT_SPEND_JWT_SECRET` (heavy) or — future improvement — bump a `token_version` claim on the user row (light). Either way, browser revocation isn't a per-row problem. (D14.)
+
+**Why machine tokens DO get rows.** Per-device revocation is the value prop ("revoke `alice-laptop` without affecting `alice-desktop`"). They're named explicitly, issued once, long-lived (90d), low-volume (3-5 per developer), and the row is what holds the revocation state. (D9, refined by D14.)
+
 ### 3.3 The auth middleware
 
+The middleware accepts the same JWT in either transport (cookie for browsers, `Authorization: Bearer` for extensions) but takes one of two paths after signature-verify based on which transport delivered it:
+
 ```typescript
-// src/auth/middleware.ts (sketch)
+// src/server/auth/middleware.ts (sketch)
+import { createHash } from "node:crypto";
+
 export async function requireAuth(req, res, next) {
-   const token = bearerOrCookie(req);
+   const { token, source } = bearerOrCookie(req);   // source: "cookie" | "bearer"
    if (!token) return res.status(401).json({ error: "no token" });
 
    let claims;
@@ -244,9 +254,18 @@ export async function requireAuth(req, res, next) {
       return res.status(401).json({ error: "invalid token" });
    }
 
-   const hash = await bcrypt.hash(token, 10);  // re-hash for lookup; bcrypt is stable on input
+   if (source === "cookie") {
+      // Browser session — no DB row to consult. JWT signature + expiry are
+      // sufficient. Identity comes straight from the claims.
+      req.identity = { userId: claims.sub, email: claims.email, role: claims.role,
+                       tokenName: "browser", source };
+      return next();
+   }
+
+   // Bearer token — must have a non-revoked, non-expired api_tokens row.
+   const hash = sha256Hex(token);
    const row = await db.oneOrNone(
-      `SELECT user_id, name, expires_at, revoked_at
+      `SELECT id AS token_id, user_id, label, expires_at, revoked_at
          FROM api_tokens
         WHERE token_hash = $1
           AND revoked_at IS NULL
@@ -255,17 +274,26 @@ export async function requireAuth(req, res, next) {
    );
    if (!row) return res.status(401).json({ error: "revoked or expired" });
 
+   // v1: inline UPDATE. Open question §12 — batching lands when /v1/traces
+   // ingest in 0.3.7 makes per-request UPDATE measurable.
    await db.none(
-      `UPDATE api_tokens SET last_seen_at = now() WHERE token_id = $1`,
+      `UPDATE api_tokens SET last_used_at = now() WHERE id = $1`,
       [row.token_id],
    );
 
-   req.identity = { userId: row.user_id, tokenName: row.name, claims };
+   req.identity = { userId: row.user_id, email: claims.email, role: claims.role,
+                    tokenName: row.label, source };
    next();
+}
+
+function sha256Hex(s: string): string {
+   return createHash("sha256").update(s).digest("hex");
 }
 ```
 
-(The actual implementation will batch the `last_seen_at` update; doing one per request is too chatty.)
+**Why two paths look like one, and why that's fine.** Both transports carry the same JWT format, both validate the same signature, and both attach the same `req.identity` shape. The only behavioural difference is whether we consult `api_tokens`. That keeps every downstream handler — `requireAuth` consumers don't care which transport authenticated the user — uniform.
+
+**`last_seen_at` v1 is inline.** The design doc's open question §12 worried about per-request `UPDATE` traffic. For 0.3.6 we ship the inline write; in 0.3.7 (when extensions actually start hitting `/v1/traces` at potentially-high QPS) we measure it and decide whether to batch via in-memory queue + periodic flush or via Postgres `LISTEN/NOTIFY`. The cost of getting it wrong now is at most one extra `UPDATE` per request through the auth middleware on the SPA — the SPA's QPS is bounded by user clicks. (D14.)
 
 Three routes that bypass auth:
 - `/health` — for healthchecks
@@ -894,7 +922,9 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 **Document status:** under active implementation. Phased delivery in §11:
 - ✅ 0.3.1 service skeleton — merged to `main` ([`345c2cc`](https://github.com/vilosource/agent-spend-dashboard/commit/345c2cc) on branch, [`2ef27f9`](https://github.com/vilosource/agent-spend-dashboard/commit/2ef27f9) merge)
 - ✅ 0.3.2 auth tables — merged to `main` ([`4e8520a`](https://github.com/vilosource/agent-spend-dashboard/commit/4e8520a) on branch, [`7595b01`](https://github.com/vilosource/agent-spend-dashboard/commit/7595b01) merge)
-- ✅ 0.3.3 OIDC against Dex — branch `feat/0.3.3-oidc-dex`; Dex compose service, openid-client + /auth routes (`/login`, `/callback`, `/logout`), session-cookie JWT, first-user-becomes-admin bootstrap, and a testcontainers integration test against real Dex
-- 🟡 0.3.4 GitHub adapter — next
+- ✅ 0.3.3 OIDC against Dex — merged to `main` ([`63eb3a9`](https://github.com/vilosource/agent-spend-dashboard/commit/63eb3a9))
+- ⏭ 0.3.4 GitHub adapter — deferred (not on the Optiscan critical path; revisit when an external-contractor scenario actually needs it)
+- 🟡 0.3.6 JWT minting + `api_tokens` table reads — next on the critical path. Token-hashing strategy and the browser-vs-machine row policy resolved in D14.
+- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.6 → 0.3.7 → 0.3.9.)
 
 Each subsequent phase ships as its own PR.

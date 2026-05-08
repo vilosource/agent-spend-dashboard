@@ -270,3 +270,49 @@ The lab's Dex IdP is reached via `http://idp.localhost:7019`. RFC 6761 reserves 
 - *`*.localhost` without `extra_hosts`:* relies on glibc's automatic resolution inside the container, which would route to the container's own loopback rather than the host's Dex. `extra_hosts` is the missing piece.
 
 **Verified end-to-end:** Browser → `/auth/login` → 302 to Dex login form (Playwright); credentials accepted; redirect back to `/auth/callback` mints a session JWT cookie; `/api/me` returns `{email, name, role}`. Testcontainers integration test exercises the same flow against a fresh Dex + Postgres pair and asserts the first-user-becomes-admin / second-user-becomes-developer bootstrap (`packages/api/src/server/auth/oidc.integration.test.ts`). Full `npm run check` (lint + typecheck + depgraph + boundary + 27 tests) green on `feat/0.3.3-oidc-dex`.
+
+---
+
+## 2026-05-08 · D14 · Token hashing is SHA-256; browser sessions are stateless; machine tokens carry the `api_tokens` row
+
+**Decision:** Three resolutions, all aimed at making phase 0.3.6 implementable without re-litigating mid-PR:
+
+1. **`api_tokens.token_hash` is SHA-256 of the JWT** (hex-encoded, 64 chars), not bcrypt. The request path looks up the row with a literal `WHERE token_hash = $1` — deterministic, O(1), index-friendly.
+2. **Browser sessions don't get an `api_tokens` row.** They're stateless — cookie carries the JWT, the auth middleware verifies the signature and checks expiry, no DB lookup. Per-tab / per-laptop revocation isn't a goal for browsers (sessions aren't named or individually meaningful). Global revocation is achieved by rotating `AGENT_SPEND_JWT_SECRET` (heavy hammer) or — future improvement — by bumping a `token_version` claim on the user row.
+3. **Machine tokens (per-device, named, long-lived) DO get a row.** That's what makes them per-device-revocable, which IS the value prop ("revoke `alice-laptop` without affecting `alice-desktop`"). They're issued explicitly with a label, hashed once on insert, and the row is the revocation primitive.
+
+Plus one engineering note that's part of the same decision because it changes how 0.3.6 ships:
+
+4. **`last_seen_at` (renamed `last_used_at` to match the schema column) is updated inline per-request in v1.** The design's open question §12 worried about per-request `UPDATE` traffic; we ship the inline write in 0.3.6 and revisit when 0.3.7's `/v1/traces` ingest produces measurable load. The cost of getting it wrong now is bounded by SPA QPS (clicks per session per user).
+
+**Scope:** Schema comment in `deploy/docker-compose/postgres/init/002_auth.sql` (the column comment currently says `bcrypt(token, cost=10)` — wrong); `docs/design/api-and-spa-DESIGN.md` §3.1 / §3.2 / §3.3; `docs/strategy/authentication-STRATEGY.md` §6.1 / §6.2 / §9; the auth middleware and token-issuance code that lands in 0.3.6 and 0.3.10.
+
+**Adds an index.** `WHERE token_hash = $1` is the hot path for every authenticated `/v1/traces` request, so 0.3.6 ships `CREATE UNIQUE INDEX idx_api_tokens_token_hash_active ON api_tokens(token_hash) WHERE revoked_at IS NULL` alongside the middleware. The partial index keeps revoked rows out of the hot path automatically. Per D12 the index lands as an amendment to `init/002_auth.sql` with `make reset` to apply.
+
+**Rationale.**
+
+The original draft of these docs (and the comment on `init/002_auth.sql`'s `token_hash` column) said `bcrypt(token, cost=10)`. That was written by analogy to password hashing and is the wrong primitive here, for two compounding reasons:
+
+1. **Bcrypt isn't deterministic.** Every call uses a fresh random salt, so `bcrypt.hash(plaintext, cost)` produces a different output every time. To verify, you call `bcrypt.compare(plaintext, hash)` against ONE row at a time. There's no way to write `WHERE token_hash = $1`. The middleware sketch in the design doc tried to call `bcrypt.hash(token, 10)` on the request side, claimed the result was "stable on input", and used it in a WHERE clause — that code would have failed every lookup. Bcrypt is for password hashing exactly because it's slow and non-deterministic; both properties are wrong for token verification.
+
+2. **Bcrypt's slowness exists to defeat brute-forcing low-entropy inputs (passwords).** Our tokens are HS256 JWTs ≥ 256 bits of entropy. Brute-force is infeasible regardless of hash speed. The slowness only adds CPU cost on the request path.
+
+SHA-256 is the standard primitive for hashing high-entropy random tokens. GitHub's PAT, AWS access keys, Stripe API keys, etc. all use deterministic non-keyed hashes (SHA-256 or similar) for storage. The pattern is so standard that it's almost not worth a decision entry — except the previous draft of THIS repo's docs had it wrong, so we're fixing the docs out loud.
+
+For the browser-row decision, the question is symmetric to what GitHub does for its own session cookies vs. its own PATs: cookies are stateless; PATs (the named, durable tokens you create via Settings) are stored. Same model.
+
+For the inline `last_seen_at`, the open question §12 in the design doc still stands; we just commit to inline-for-v1 to keep 0.3.6 implementable.
+
+**Rejected alternatives:**
+
+- *Keep bcrypt + iterate on every request.* Means O(n) per authenticated request; performance breaks at modest token counts. Discarded.
+- *HMAC-SHA-256 with a server-side pepper instead of plain SHA-256.* Adds defense-in-depth: even with full DB access an attacker can't precompute hashes for tokens they happen to learn elsewhere. But our tokens are random 256-bit secrets that we never expose outside the issuance flow; there's no "tokens you happen to learn elsewhere" attack surface. Plain SHA-256 is enough; HMAC is complexity for a non-threat. (Easy to upgrade later if a threat model changes.)
+- *Store the bcrypt hash AND a SHA-256 lookup hash in two columns.* Belt-and-suspenders that buys us nothing once we accept SHA-256 is correct.
+- *Browser sessions DO get an `api_tokens` row (strategy doc's earlier draft).* Discarded. Write amplification on every login + cleanup burden on 24h-old rows + no real revocation value. Per-device revocation is the machine-token use case.
+- *Skip `last_seen_at` updates entirely until batching lands.* Would mean admins can't see "this token hasn't been used in 30 days" in 0.3.10's Token Management UI. Inline-then-optimise is the right order.
+
+**Verified by writing it down.** Phase 0.3.6 implementation can now proceed without ambiguity:
+- Middleware computes `sha256Hex(token)`, single `SELECT` against `api_tokens(token_hash, revoked_at, expires_at)`, single `UPDATE last_used_at`.
+- Browser session path skips the DB entirely after JWT signature-verify.
+- Schema gets a `token_hash` partial unique index for the hot path.
+- 0.3.10 (token management UI) issues a fresh JWT, computes its SHA-256, INSERTs the row with `(user_id, token_hash, label, expires_at)`.

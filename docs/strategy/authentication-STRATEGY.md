@@ -125,11 +125,12 @@ The default is **Dex with real OIDC** — this exercises the production code pat
 After a successful login, the API:
 
 1. Mints a JWT signed with `AGENT_SPEND_JWT_SECRET` (HS256). Claims: `sub`, `email`, `name`, `role`, `teams`, `iat`, `exp`. The `AGENT_SPEND_` prefix avoids collisions with generic env-var names other apps on the same host might define (D13).
-2. Hashes the JWT with bcrypt; stores `(user_id, token_hash, name="browser-<short-id>", created_at, expires_at, last_seen_at)` in the `api_tokens` table. *(bcrypt hashing + api_tokens row writes land in phase 0.3.6; phase 0.3.3 ships only the cookie path.)*
-3. Sets the JWT as an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie.
-4. The SPA includes the cookie automatically on every request.
+2. Sets the JWT as an `HttpOnly`, `SameSite=Lax` session cookie (`Secure` when `PUBLIC_URL` is `https://`).
+3. The SPA includes the cookie automatically on every request. The auth middleware verifies the JWT signature and checks expiry; **no `api_tokens` row is consulted for browser sessions** — they're stateless.
 
-Browser sessions are short — **24 hour TTL**. Refresh on activity. Re-prompts for login after a day of inactivity.
+Browser sessions are short — **24 hour TTL**. The expiry claim is the only revocation primitive at the browser level. Per-tab / per-laptop revocation isn't a goal for browsers (sessions aren't named or individually meaningful); machine tokens cover the per-device revocation use case (§6.2).
+
+Earlier drafts of this doc proposed creating an `api_tokens` row per browser login (`name="browser-<short-id>"`, bcrypt-hashed). That was wrong on two counts: bcrypt's random salt makes deterministic lookup impossible (you can't `WHERE token_hash = $1`), and the per-row write amplification on every cookie clear / incognito tab / mobile login bought no real value. Browser revocation is now a global / per-user concern (rotate `AGENT_SPEND_JWT_SECRET`, or — future improvement — bump a `token_version` claim on the user row), not a per-row concern. (D14.)
 
 ### 6.2 Per-machine pi extension tokens
 
@@ -137,10 +138,10 @@ When a developer clicks "Install on this machine" in the SPA, they name the mach
 
 - Same JWT shape as the browser session, plus a `machine` claim.
 - **90 day TTL** (configurable per deployment).
-- Hashed and stored in `api_tokens` with `name="<machine-name>"`.
+- **SHA-256-hashed** and stored in `api_tokens` with `label="<machine-name>"`. Per D14: SHA-256 (not bcrypt) is the right primitive here — JWTs are high-entropy, and the request path needs deterministic O(1) lookup by hash.
 - Returned **once** in the install one-liner; never displayed again.
 
-The Settings → Tokens page in the SPA lists every active token for the current user, with `name`, `created_at`, `last_seen_at`, and a Revoke button. Revoking sets `revoked_at` on the row; the API's auth middleware rejects any token whose hash matches a revoked row.
+The Settings → Tokens page in the SPA lists every active token for the current user, with `label`, `created_at`, `last_used_at`, and a Revoke button. Revoking sets `revoked_at` on the row; the API's auth middleware rejects any token whose hash matches a revoked row.
 
 ### 6.3 CI tokens
 
@@ -233,9 +234,10 @@ This is the privacy-by-design conversation made explicit before the install comm
 3. **Three lab modes:** Dex (default; exercises real OIDC), `LAB_NO_AUTH=true` (escape hatch), production OIDC. Default is Dex.
 4. **API mints its own JWT** after OIDC callback. IdP tokens are not stored or reused.
 5. **Identity comes from JWT claims**, not from anything the extension's environment asserts. Extensions cannot forge identity.
-6. **Two TTLs: 24 h for browser sessions; 90 d for per-machine extension tokens.** Both revocable, both stored as bcrypt hashes.
-7. **Per-machine tokens, not per-user tokens.** One user → many machines, each independently revocable. Settings → Tokens lists them with last-seen timestamps.
-8. **The OAuth 2.0 Device Authorization Grant** (RFC 8628) is the auth path for `pi-usage login` from a terminal. Works on headless / CI machines.
-9. **Privacy preview before install.** SPA shows what the extension will transmit before the user commits.
-10. **`git config user.email` fallback in the extension is removed.** Identity comes from the token; the extension errors out clearly if no token is configured. (Recorded as D8 in the dashboard's decisions log and as D13 in the pi-extensions decisions log.)
+6. **Two TTLs: 24 h for browser sessions; 90 d for per-machine extension tokens.** Browser sessions are stateless (cookie-only); machine tokens have a row in `api_tokens` and are individually revocable. (D14.)
+7. **Per-machine tokens, not per-user tokens.** One user → many machines, each independently revocable. Settings → Tokens lists them with last-used timestamps.
+8. **Token hashing: SHA-256, not bcrypt.** Tokens are high-entropy random JWTs; SHA-256 is deterministic so the request path can look up by hash in O(1). Bcrypt's random salt would force an O(n) `bcrypt.compare()` per request. (D14.)
+9. **The OAuth 2.0 Device Authorization Grant** (RFC 8628) is the auth path for `pi-usage login` from a terminal. Works on headless / CI machines.
+10. **Privacy preview before install.** SPA shows what the extension will transmit before the user commits.
+11. **`git config user.email` fallback in the extension is removed.** Identity comes from the token; the extension errors out clearly if no token is configured. (Recorded as D8 in the dashboard's decisions log and as D13 in the pi-extensions decisions log.)
 
