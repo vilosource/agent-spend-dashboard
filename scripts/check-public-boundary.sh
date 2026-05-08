@@ -36,7 +36,7 @@ PATTERNS=(
   # Organization names other than the maintainer (vilosource).
   # Note: 'viloforge' on its own is allowed (it is the company persona /
   # git committer); only viloforge.com (the FQDN) is forbidden.
-  'org-name|\boptiscan\b|Specific organization name. Optiscan-specific values belong in a private deployment repo.'
+  'org-name|optiscan|Specific organization name (any variant: optiscan, optiscan-group, optiscangroup, etc.). Optiscan-specific values belong in a private deployment repo.'
 
   # FQDNs and internal-DNS suffixes
   'fqdn|viloforge\.com|Real Vilosource FQDN. Use <organization-collector-host> or *.example.com placeholders instead.'
