@@ -58,7 +58,65 @@ export interface Db {
 	findUserIdByEmail(email: string): Promise<number | null>;
 	/** Batch INSERT into agent_spend_logs. No-op for an empty array. */
 	insertSpendLogs(rows: readonly SpendLogRow[]): Promise<void>;
+	/**
+	 * Aggregate totals over agent_spend_logs filtered by `where` (an
+	 * AND-able SQL fragment built via auth/scope.ts) and `params`.
+	 * Returns the four scalar sums + count the /me KPI cards display.
+	 */
+	fetchUsageTotals(where: string, params: readonly unknown[]): Promise<UsageTotals>;
+	/** Per-day rollup; one row per UTC calendar day in the range, sorted asc. */
+	fetchUsageByDay(where: string, params: readonly unknown[]): Promise<UsageByDay[]>;
+	/** Per-model rollup; sorted by cost desc. */
+	fetchUsageByModel(where: string, params: readonly unknown[]): Promise<UsageByModel[]>;
+	/**
+	 * Paginated session list. Cursor is `(last_ts, session_id)` per
+	 * design §5.2. Caller passes `cursorTs`/`cursorSessionId` decoded
+	 * from the opaque `?cursor=` query param (or null for the first page).
+	 */
+	fetchSessions(input: FetchSessionsInput): Promise<SessionRow[]>;
 	close(): Promise<void>;
+}
+
+export interface UsageTotals {
+	readonly costUsd: number;
+	readonly turns: number;
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	readonly cacheRead: number;
+	readonly cacheWrite: number;
+}
+
+export interface UsageByDay {
+	readonly day: string; // ISO date (YYYY-MM-DD)
+	readonly costUsd: number;
+	readonly turns: number;
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+}
+
+export interface UsageByModel {
+	readonly model: string;
+	readonly provider: string;
+	readonly costUsd: number;
+	readonly turns: number;
+}
+
+export interface FetchSessionsInput {
+	readonly where: string;
+	readonly params: readonly unknown[];
+	readonly limit: number;
+	/** When set, return rows whose (last_ts, session_id) is strictly less than the cursor. */
+	readonly cursorLastTs: Date | null;
+	readonly cursorSessionId: string | null;
+}
+
+export interface SessionRow {
+	readonly sessionId: string;
+	readonly firstTs: Date;
+	readonly lastTs: Date;
+	readonly costUsd: number;
+	readonly turns: number;
+	readonly models: readonly string[];
 }
 
 const SPEND_LOG_COLUMNS = [
@@ -213,6 +271,140 @@ export function createDb(databaseUrl: string): Db {
 
 		async revokeApiToken(tokenId: number) {
 			await pool.query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [tokenId]);
+		},
+
+		async fetchUsageTotals(where, params) {
+			// NUMERIC casts to text in pg's default mapping; SUM with no
+			// rows returns NULL, so we COALESCE to 0 and parse after.
+			const { rows: result } = await pool.query<{
+				cost_usd: string;
+				turns: string;
+				input_tokens: string;
+				output_tokens: string;
+				cache_read: string;
+				cache_write: string;
+			}>(
+				`SELECT COALESCE(SUM(cost_total_usd), 0)::text AS cost_usd,
+				        COUNT(*)::text                          AS turns,
+				        COALESCE(SUM(input_tokens), 0)::text    AS input_tokens,
+				        COALESCE(SUM(output_tokens), 0)::text   AS output_tokens,
+				        COALESCE(SUM(cache_read), 0)::text      AS cache_read,
+				        COALESCE(SUM(cache_write), 0)::text     AS cache_write
+				   FROM agent_spend_logs
+				  WHERE ${where}`,
+				[...params],
+			);
+			const r = result[0];
+			if (!r) return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
+			return {
+				costUsd: Number.parseFloat(r.cost_usd),
+				turns: Number.parseInt(r.turns, 10),
+				inputTokens: Number.parseInt(r.input_tokens, 10),
+				outputTokens: Number.parseInt(r.output_tokens, 10),
+				cacheRead: Number.parseInt(r.cache_read, 10),
+				cacheWrite: Number.parseInt(r.cache_write, 10),
+			};
+		},
+
+		async fetchUsageByDay(where, params) {
+			const { rows: result } = await pool.query<{
+				day: string;
+				cost_usd: string;
+				turns: string;
+				input_tokens: string;
+				output_tokens: string;
+			}>(
+				`SELECT to_char(date_trunc('day', ts), 'YYYY-MM-DD')      AS day,
+				        COALESCE(SUM(cost_total_usd), 0)::text            AS cost_usd,
+				        COUNT(*)::text                                    AS turns,
+				        COALESCE(SUM(input_tokens), 0)::text              AS input_tokens,
+				        COALESCE(SUM(output_tokens), 0)::text             AS output_tokens
+				   FROM agent_spend_logs
+				  WHERE ${where}
+				  GROUP BY 1
+				  ORDER BY 1`,
+				[...params],
+			);
+			return result.map((r) => ({
+				day: r.day,
+				costUsd: Number.parseFloat(r.cost_usd),
+				turns: Number.parseInt(r.turns, 10),
+				inputTokens: Number.parseInt(r.input_tokens, 10),
+				outputTokens: Number.parseInt(r.output_tokens, 10),
+			}));
+		},
+
+		async fetchUsageByModel(where, params) {
+			const { rows: result } = await pool.query<{
+				model: string;
+				provider: string;
+				cost_usd: string;
+				turns: string;
+			}>(
+				`SELECT model,
+				        provider,
+				        COALESCE(SUM(cost_total_usd), 0)::text AS cost_usd,
+				        COUNT(*)::text                         AS turns
+				   FROM agent_spend_logs
+				  WHERE ${where}
+				  GROUP BY model, provider
+				  ORDER BY SUM(cost_total_usd) DESC NULLS LAST`,
+				[...params],
+			);
+			return result.map((r) => ({
+				model: r.model,
+				provider: r.provider,
+				costUsd: Number.parseFloat(r.cost_usd),
+				turns: Number.parseInt(r.turns, 10),
+			}));
+		},
+
+		async fetchSessions({ where, params, limit, cursorLastTs, cursorSessionId }) {
+			// Build a query that:
+			//   - groups agent_spend_logs by session_id under `where`
+			//   - keeps only sessions whose (max(ts), session_id) is strictly
+			//     less than the cursor when one is provided
+			//   - returns up to `limit` rows ordered by (last_ts DESC, session_id DESC)
+			//
+			// The HAVING clause does the cursor comparison against the
+			// per-session aggregate so the row matches the ORDER BY tuple.
+			const cursorFragment =
+				cursorLastTs && cursorSessionId
+					? `HAVING (MAX(ts), session_id::text) < ($${params.length + 1}::timestamptz, $${params.length + 2}::text)`
+					: "";
+			const cursorParams = cursorLastTs && cursorSessionId ? [cursorLastTs, cursorSessionId] : [];
+			const limitPlaceholder = `$${params.length + cursorParams.length + 1}`;
+
+			const sql = `
+				SELECT session_id::text                        AS session_id,
+				       MIN(ts)                                  AS first_ts,
+				       MAX(ts)                                  AS last_ts,
+				       COALESCE(SUM(cost_total_usd), 0)::text   AS cost_usd,
+				       COUNT(*)::text                           AS turns,
+				       array_agg(DISTINCT model)                AS models
+				  FROM agent_spend_logs
+				 WHERE ${where}
+				 GROUP BY session_id
+				 ${cursorFragment}
+				 ORDER BY MAX(ts) DESC, session_id DESC
+				 LIMIT ${limitPlaceholder}
+			`;
+			const { rows: result } = await pool.query<{
+				session_id: string;
+				first_ts: Date;
+				last_ts: Date;
+				cost_usd: string;
+				turns: string;
+				models: string[];
+			}>(sql, [...params, ...cursorParams, limit]);
+			return result.map((r) => ({
+				sessionId: r.session_id,
+				firstTs: r.first_ts,
+				lastTs: r.last_ts,
+				costUsd: Number.parseFloat(r.cost_usd),
+				turns: Number.parseInt(r.turns, 10),
+				models: r.models,
+			}));
 		},
 
 		async insertSpendLogs(rows) {

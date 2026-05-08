@@ -37,6 +37,18 @@ function makeFakeDb(): Db {
 		},
 		async revokeApiToken() {},
 		async insertSpendLogs() {},
+		async fetchUsageTotals() {
+			return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
+		},
+		async fetchUsageByDay() {
+			return [];
+		},
+		async fetchUsageByModel() {
+			return [];
+		},
+		async fetchSessions() {
+			return [];
+		},
 		async close() {},
 	};
 }

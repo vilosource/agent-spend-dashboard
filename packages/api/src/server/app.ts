@@ -17,12 +17,12 @@
 
 import express, { type Express, type Request, type Response } from "express";
 import { VERSION } from "../shared/version.js";
-import { requireAuth } from "./auth/middleware.js";
 import type { OidcContext } from "./auth/oidc.js";
 import { authRoutes } from "./auth/routes.js";
 import { readSession } from "./auth/session.js";
 import type { Db } from "./db.js";
 import { ingestRoutes } from "./ingest/routes.js";
+import { meRoutes } from "./me/routes.js";
 
 export interface AppDeps {
 	readonly publicUrl: string;
@@ -41,26 +41,7 @@ export function createApp(deps: AppDeps): Express {
 
 	app.use("/auth", authRoutes(deps));
 	app.use(ingestRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
-
-	// /api/me — authenticated identity probe. Accepts either the session
-	// cookie (browser, stateless) or `Authorization: Bearer <jwt>` (CLI /
-	// extension / CI, validated against api_tokens). Both transports
-	// populate req.identity uniformly. The full /me page lands in 0.3.9.
-	const auth = requireAuth({ db: deps.db, jwtSecret: deps.jwtSecret });
-	app.get("/api/me", auth, (req, res) => {
-		const id = req.identity;
-		if (!id) {
-			res.status(500).json({ error: "identity not attached" });
-			return;
-		}
-		res.json({
-			email: id.email,
-			name: id.name,
-			role: id.role,
-			tokenLabel: id.tokenLabel,
-			source: id.source,
-		});
-	});
+	app.use("/api", meRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
 
 	app.get("/", async (req: Request, res: Response) => {
 		const session = await readSession(req, deps.jwtSecret);
