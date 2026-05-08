@@ -1,0 +1,61 @@
+# Lab-only overrides for compose.yml.
+#
+# Per docs/strategy/local-lab-STRATEGY.md §4.2: this file is loaded
+# automatically by `docker compose` when in the same directory. It
+# adds dev-friendly behavior (hardcoded creds, exposed ports) and
+# the bridge + seeder services that are not part of the production
+# recipe.
+#
+# A production deployment uses compose.yml WITHOUT this override.
+
+name: agent-spend
+
+services:
+   postgres:
+      environment:
+         POSTGRES_USER: agent_spend
+         POSTGRES_PASSWORD: dev
+         POSTGRES_DB: agent_spend
+      ports:
+         - "5432:5432"
+
+   collector:
+      ports:
+         - "4317:4317"   # OTLP gRPC
+         - "4318:4318"   # OTLP HTTP
+         - "13133:13133" # health check
+      # The collector image runs as a non-root user but the otel-spans volume
+      # is root-owned by Docker on first creation. Run the collector as root
+      # in the lab to keep the file/spans exporter working without volume
+      # permission gymnastics. A production deployment should instead set up
+      # the volume's ownership correctly OR drop the file exporter.
+      user: "0:0"
+
+   # Bridge: tails the Collector's JSONL output and inserts into Postgres.
+   # Until the API service lands (phase 0.3), this is the only writer to
+   # agent_spend_logs. Replaced by the API in 0.3.
+   bridge:
+      build: ../../lab/bridge
+      restart: unless-stopped
+      depends_on:
+         collector:
+            condition: service_started
+         postgres:
+            condition: service_healthy
+      environment:
+         BRIDGE_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+         BRIDGE_SPANS: /var/log/otel/spans.jsonl
+      volumes:
+         - otel-spans:/var/log/otel:ro
+
+   # Seeder: one-shot service. Run via `make seed` (which executes
+   # `docker compose run --rm seeder` with whatever args you want).
+   seeder:
+      build: ../../lab/seed
+      profiles: ["seed"]   # Don't auto-start; only on explicit `run`
+      depends_on:
+         collector:
+            condition: service_started
+      environment:
+         OTEL_ENDPOINT: http://collector:4318
+      command: ["--endpoint", "http://collector:4318", "--days", "7", "--users", "10"]

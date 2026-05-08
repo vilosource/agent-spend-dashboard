@@ -62,3 +62,26 @@ For GitHub Copilot the OAuth state is held in `~/.pi/agent/auth.json` on the hos
 The "low monthly cap" guidance from D2 (which referenced Anthropic's per-key spending caps) does not apply: both z.ai's Coding Plan and GitHub Copilot are subscription-based with no per-call billing exposure to manage.
 
 **Supersedes the relevant clauses of D2** (provider selection only). The rest of D2 (Compose stack, profiles, containerized pi target, Dex, synthetic emitter, scenario format, CI integration) stands.
+
+---
+
+## 2026-05-08 · D4 · Bridge service for OTLP→Postgres until the API service lands
+
+**Decision:** The lab uses a small Python script (`lab/bridge/bridge.py`) that tails the OTel Collector's `file/spans` JSONL exporter output and `INSERT`s rows into `agent_spend_logs`. The Collector writes JSONL via the well-supported `file` exporter; the bridge does the last-hop write to Postgres. The bridge runs as a Compose service in the lab (`bridge`) and is replaced by the API service in phase 0.3.
+
+**Scope:** This repo, lab tooling. Not part of any production deployment recipe.
+
+**Rationale:** The OTel Collector's official `postgresql` exporter does not exist; the experimental `sqlexporter` has unstable shape and is not part of the contrib distribution most installations use. Building our own Collector exporter is not justified — phase 0.3's API service will own the database write path anyway.
+
+The intermediate JSONL file is a clean seam:
+
+- The Collector does what Collectors do (receive, batch, redact, fan out).
+- The bridge does Postgres-specific work in a small, easily-tested script.
+- If the bridge is down, the JSONL file accumulates; the bridge catches up on restart. The Collector keeps accepting traffic.
+- When the API service lands, the bridge goes away — the API consumes OTLP directly via its own ingest endpoint, or via a Collector-to-API HTTP exporter. The intermediate JSONL stops being needed.
+
+The bridge is ~150 lines of Python with stdlib + `psycopg`. No build step. Easy to read, easy to fix.
+
+**Validated:** Lab end-to-end (2026-05-08): synthetic emitter sends 2800 spans → Collector writes JSONL → bridge inserts → 2800 rows in `agent_spend_logs` → all expected aggregations work (per-user cost, per-team rollup, per-model breakdown, subscription-vs-metered separation, materialized view refresh).
+
+**Sunset condition:** Phase 0.3 lands the API service. When the API can ingest OTLP directly (or via a Collector OTLP exporter pointing at it), the bridge service is removed from `compose.override.yml` and the JSONL exporter from `collector/config.yaml`.
