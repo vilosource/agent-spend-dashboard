@@ -36,6 +36,7 @@ function makeFakeDb(): Db {
 			return { id: 0 };
 		},
 		async revokeApiToken() {},
+		async insertSpendLogs() {},
 		async close() {},
 	};
 }

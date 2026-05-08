@@ -9,6 +9,7 @@
  */
 
 import { Pool as PgPool, type Pool } from "pg";
+import type { SpendLogRow } from "./ingest/transform.js";
 
 export type UserRole = "admin" | "developer";
 
@@ -55,7 +56,73 @@ export interface Db {
 	revokeApiToken(tokenId: number): Promise<void>;
 	/** Find a user's numeric id by email. Used by 0.3.10's token issuance. */
 	findUserIdByEmail(email: string): Promise<number | null>;
+	/** Batch INSERT into agent_spend_logs. No-op for an empty array. */
+	insertSpendLogs(rows: readonly SpendLogRow[]): Promise<void>;
 	close(): Promise<void>;
+}
+
+const SPEND_LOG_COLUMNS = [
+	"ts",
+	"user_id",
+	"team",
+	"machine_id",
+	"session_id",
+	"workspace_cwd",
+	"workspace_repo",
+	"workspace_branch",
+	"workspace_is_ci",
+	"provider",
+	"api",
+	"model",
+	"response_model",
+	"harness_name",
+	"harness_version",
+	"input_tokens",
+	"output_tokens",
+	"cache_read",
+	"cache_write",
+	"cost_input_usd",
+	"cost_output_usd",
+	"cost_cache_read_usd",
+	"cost_cache_write_usd",
+	"cost_total_usd",
+	"cost_estimation",
+	"stop_reason",
+	"event_kind",
+	"environment",
+] as const;
+
+function spendLogValues(row: SpendLogRow): readonly unknown[] {
+	return [
+		row.ts,
+		row.userId,
+		row.team,
+		row.machineId,
+		row.sessionId,
+		row.workspaceCwd,
+		row.workspaceRepo,
+		row.workspaceBranch,
+		row.workspaceIsCi,
+		row.provider,
+		row.api,
+		row.model,
+		row.responseModel,
+		row.harnessName,
+		row.harnessVersion,
+		row.inputTokens,
+		row.outputTokens,
+		row.cacheRead,
+		row.cacheWrite,
+		row.costInputUsd,
+		row.costOutputUsd,
+		row.costCacheReadUsd,
+		row.costCacheWriteUsd,
+		row.costTotalUsd,
+		row.costEstimation,
+		row.stopReason,
+		row.eventKind,
+		row.environment,
+	];
 }
 
 export function createDb(databaseUrl: string): Db {
@@ -146,6 +213,31 @@ export function createDb(databaseUrl: string): Db {
 
 		async revokeApiToken(tokenId: number) {
 			await pool.query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [tokenId]);
+		},
+
+		async insertSpendLogs(rows) {
+			if (rows.length === 0) return;
+			// Postgres' parameter limit is 65 535 across all rows. With
+			// SPEND_LOG_COLUMNS.length columns per row that bounds us at
+			// ~2 340 rows per call. Real OTLP batches are much smaller
+			// (one extension flushes a handful per turn), so we INSERT in
+			// one call. If a future scenario needs bigger batches, chunk
+			// by Math.floor(65000 / SPEND_LOG_COLUMNS.length).
+			const colCount = SPEND_LOG_COLUMNS.length;
+			const placeholders: string[] = [];
+			const values: unknown[] = [];
+			let p = 1;
+			for (const row of rows) {
+				const row$: string[] = [];
+				for (let i = 0; i < colCount; i += 1) {
+					row$.push(`$${p}`);
+					p += 1;
+				}
+				placeholders.push(`(${row$.join(",")})`);
+				values.push(...spendLogValues(row));
+			}
+			const sql = `INSERT INTO agent_spend_logs (${SPEND_LOG_COLUMNS.join(",")}) VALUES ${placeholders.join(",")}`;
+			await pool.query(sql, values);
 		},
 
 		async close() {

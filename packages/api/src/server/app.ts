@@ -8,7 +8,7 @@
  *   /auth/login    → start OIDC flow
  *   /auth/callback → finish OIDC flow, mint session cookie
  *   /auth/logout   → clear session cookie
- *   /v1/traces     → OTLP ingest (phase 0.3.7)
+ *   /v1/traces     → OTLP ingest (bearer-only, phase 0.3.7)
  *
  * The factory pattern keeps IO (`listen`, db connections, OIDC
  * discovery) separate from app construction so tests can wire a
@@ -22,6 +22,7 @@ import type { OidcContext } from "./auth/oidc.js";
 import { authRoutes } from "./auth/routes.js";
 import { readSession } from "./auth/session.js";
 import type { Db } from "./db.js";
+import { ingestRoutes } from "./ingest/routes.js";
 
 export interface AppDeps {
 	readonly publicUrl: string;
@@ -39,6 +40,7 @@ export function createApp(deps: AppDeps): Express {
 	});
 
 	app.use("/auth", authRoutes(deps));
+	app.use(ingestRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
 
 	// /api/me — authenticated identity probe. Accepts either the session
 	// cookie (browser, stateless) or `Authorization: Bearer <jwt>` (CLI /
