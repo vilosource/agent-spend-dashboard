@@ -1,0 +1,47 @@
+# Production-shaped Docker Compose recipe for the reference dashboard server.
+#
+# Per docs/strategy/local-lab-STRATEGY.md §4.2, this file is what a small
+# organization would deploy on a single VM. Every value an organization
+# would change is parameterized (see .env.example).
+#
+# When the lab uses this file (via `make lab` from the repo root), the
+# sibling compose.override.yml adds lab-only ergonomics: hardcoded
+# credentials, exposed ports, the seeder/bridge services.
+
+name: agent-spend
+
+services:
+   postgres:
+      image: postgres:16-alpine
+      restart: unless-stopped
+      environment:
+         POSTGRES_USER: ${POSTGRES_USER:-agent_spend}
+         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+         POSTGRES_DB: ${POSTGRES_DB:-agent_spend}
+      volumes:
+         - pg-data:/var/lib/postgresql/data
+         - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      healthcheck:
+         test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_spend}"]
+         interval: 5s
+         timeout: 5s
+         retries: 10
+
+   collector:
+      image: otel/opentelemetry-collector-contrib:0.117.0
+      restart: unless-stopped
+      command: ["--config=/etc/otel/config.yaml"]
+      volumes:
+         - ./collector/config.yaml:/etc/otel/config.yaml:ro
+         - otel-spans:/var/log/otel
+      depends_on:
+         postgres:
+            condition: service_healthy
+      # The otelcol-contrib image has no curl/wget; in-container HTTP healthchecks
+      # are not feasible. We rely on dependents using `condition: service_started`
+      # and on the collector's own log output to confirm readiness. The Makefile's
+      # wait-healthy target probes http://localhost:13133/ from the host.
+
+volumes:
+   pg-data:
+   otel-spans:

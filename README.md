@@ -6,7 +6,16 @@ This repository is the **reference dashboard server** for the [scope-and-deploym
 
 ## Status
 
-**Pre-implementation.** This repo currently contains documentation only:
+**Lab foundation working.** The Compose stack (Postgres + OTel Collector + bridge) and the synthetic emitter land in this PR. End-to-end verified: `make lab && make seed` brings up a working local environment in under a minute and populates `agent_spend_logs` with ~2800 rows of representative seed data.
+
+What's not yet implemented:
+
+- The pi-test container (§5 of the lab strategy) — next PR.
+- Scenarios + `make e2e` (§9–10) — follow-up.
+- The API service + SPA — phase 0.3.
+- Grafana dashboards — phase 0.4.
+
+## What's here today
 
 - A [local lab strategy](docs/strategy/local-lab-STRATEGY.md) describing the Compose-based development environment, containerized pi target, scenario format, and CI integration
 - A [public/private boundary strategy](docs/strategy/public-boundary-STRATEGY.md) and the same boundary CI as [`vilosource/pi-extensions`](https://github.com/vilosource/pi-extensions)
@@ -21,6 +30,17 @@ This is **not** Optiscan's deployment of the dashboard. Optiscan's deployment li
 This is also **not** the pi extension. The extension that emits OTel from a pi session lives at [`vilosource/pi-extensions`](https://github.com/vilosource/pi-extensions). The dashboard consumes what the extension emits; they are two artifacts with two release cycles.
 
 ## What you can do today
+
+Run the lab:
+
+```bash
+make lab     # bring up Postgres + Collector + bridge (~15s)
+make seed    # emit ~2800 synthetic spans (~5s)
+make psql    # poke around the agent_spend_logs table
+make clean   # tear everything down (irreversible)
+```
+
+See `make help` for the full verb list. The lab uses defaults from `deploy/docker-compose/.env` (intentionally insecure placeholders for local development); a production deployment uses `compose.yml` alone with a real `.env`.
 
 Read the docs:
 

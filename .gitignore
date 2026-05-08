@@ -25,3 +25,6 @@ Thumbs.db
 # Local lab data (volumes are docker-managed, but bind mounts may land here)
 .cache/
 data/
+
+# But DO commit deploy/docker-compose/.env (it contains lab-only placeholders)
+!deploy/docker-compose/.env
