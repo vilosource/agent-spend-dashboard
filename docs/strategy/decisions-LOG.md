@@ -189,3 +189,59 @@ Plus a fourth path for terminal-only login: `pi-usage login` runs the **OAuth 2.
 **Rationale:** One config file shape covers every case; the install path is just "how did the file get written." Making a single shape work everywhere keeps the extension simple (one code path reads config) and the SPA UI honest (Install means writing this exact file).
 
 The privacy preview before install (Install page lists exactly what will be transmitted before the user pastes anything) is not legally required but is the kind of trust signal that costs little and is rare enough in enterprise telemetry that it's worth doing.
+
+---
+
+## 2026-05-08 · D11 · Lab port layout — minimum exposure on 70xx
+
+**Decision:** Three-tier port-exposure policy for the lab Compose stack:
+
+- **Tier 1 — always exposed (real user-facing surfaces):**
+  - `7000` Grafana
+  - `7080` API
+- **Tier 2 — transitional, exposed with documented sunset:**
+  - `7018` OTel Collector OTLP/HTTP — retires at phase 0.3.8 when the API absorbs `/v1/traces` (per D6)
+- **Tier 3 — NOT exposed; in-Compose only:**
+  - Postgres `:5432` → access via `make psql` (`docker compose exec`)
+  - OTLP gRPC `:4317` → no consumer
+  - Collector health `:13133` → `wait-healthy` reads Compose status, not a host probe
+
+Container-internal ports stay at their defaults (`postgres:5432`, `collector:4318`, `grafana:3000`, `api:8080`) so service-to-service DNS keeps working unchanged. Only the host-side mapping changes.
+
+**Scope:** `deploy/docker-compose/compose.override.yml`, `Makefile`, lab + design + decisions docs in both repos.
+
+**Rationale:** The previous layout exposed six ports — three of which had no consumer outside Compose ("posti-host" already held 8080 on the dev machine; OTLP gRPC was exposed by reflex; the health endpoint existed only for the Makefile to probe, which is now done via `docker compose ps --format json`). Mixing user-facing surfaces with debug-conveniences had real cost: more port-conflict opportunities, noisy startup message, surprise attack surface. The 70xx cluster is mnemonic and free on developer machines.
+
+**Rejected alternatives:**
+
+- *Expose-everything (status quo):* status quo. Discarded after the Postgres question made the over-exposure obvious.
+- *70xx for everything (six ports):* still noisy in the `make lab` message; doesn't separate real surfaces from debug.
+- *Separate dev-mode and lab-mode overrides:* too much config surface for the size of the team.
+
+**Verified end-to-end:** `7000`, `7018`, `7080` respond after `make lab`; `5432`, `4317`, `4318`, `13133`, `3000`, `8090` all refuse (expected). `make psql` works through Compose exec without a host port. CI green.
+
+---
+
+## 2026-05-08 · D12 · Schema changes via drop-and-reseed until we have data worth keeping
+
+**Decision:** Pre-production, schema changes ship as additional or amended `init/*.sql` files in `deploy/docker-compose/postgres/init/`. To apply, drop the data volume: `make reset` (`docker compose down -v && make lab && make seed`). Phase 0.3.2 (auth tables) lands as `init/002_auth.sql` under this policy.
+
+This is **explicitly a temporary policy** with three trigger conditions, any of which moves us to a real migration tool (`node-pg-migrate` or equivalent):
+
+1. We have a real user whose data we'd be sad to lose.
+2. We deploy to a second environment (lab + a private deployment) that gets out of schema sync.
+3. We need a non-additive change (column rename, drop, type change).
+
+When the first trigger fires, the next phase introduces the migration tool, keeps the `init/*.sql` files for first-time bootstrap, and ships all subsequent changes as tracked migrations. The policy is documented at the top of `init/002_auth.sql` itself so it can't be silently ignored.
+
+**Scope:** `deploy/docker-compose/postgres/init/`, `Makefile` (`make reset`), `api-and-spa-DESIGN.md` §9 status note.
+
+**Rationale:** Migration tooling earns its keep when at least one of (durable data, multi-environment, non-additive change) is true. None are true today: ~2800 rows of seeded synthetic data + a handful of `kb-pi` runs, single environment, additive changes only. Building the tooling now would be premature complexity (`pgmigrations` table, up/down migrations, runner integrated into `cli.ts`, testcontainers for migration tests). When we hit the first trigger we'll invest the day to do it right; until then, drop-and-reseed is correct.
+
+**Rejected alternatives:**
+
+- *Adopt `node-pg-migrate` now:* premature. Costs ~1 day; saves nothing today; the API doesn't even read these tables yet (auth middleware lands in 0.3.6).
+- *Hand-rolled SQL files + 30-line runner:* same cost as a real tool, less battle-tested.
+- *Skip auth tables until we have a migration tool:* couples two phases unnecessarily; auth tables can sit unused while the API skeleton evolves.
+
+**Verified:** `make reset` re-creates all six tables (`agent_spend_logs` + `users` + `teams` + `api_tokens` + `budgets` + `audit_log`) cleanly; constraints behave (UNIQUE active label, CHECK monthly_usd >= 0, audit_log append-only via DB rules, updated_at trigger on users); seed re-emits 2800 rows; Grafana dashboards render unchanged.

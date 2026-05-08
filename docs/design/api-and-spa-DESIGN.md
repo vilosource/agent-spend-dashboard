@@ -689,6 +689,22 @@ Per [C6](#14-constraints), the install is reversible. No cruft left on a develop
 
 Existing `agent_spend_logs` per [§5.2 of pi-usage-reporter-DESIGN.md](https://github.com/vilosource/pi-extensions/blob/main/docs/design/pi-usage-reporter-DESIGN.md) stays as-is. New tables this design adds:
 
+> **Phase 0.3.2 status (landed):** the auth tables shipped as `deploy/docker-compose/postgres/init/002_auth.sql` (commit on `feat/0.3.2-auth-schema`). The landed schema is **a simplified subset** of the aspirational design below — see notes per table. Pre-production policy: changes to these tables apply via `make reset` (drop volume + re-run init/*.sql); we adopt a real migration tool when (a) we have data we'd be sad to lose, (b) we have two environments out of sync, or (c) we need a non-additive change. The aspirational columns below land incrementally as features need them.
+
+**v1 simplifications vs the aspirational schema:**
+
+| Concept | Aspirational | v1 landed | Why deferred |
+|---|---|---|---|
+| `users.role` | `developer` / `team_lead` / `admin` | `developer` / `admin` (enum) | No team-lead UX in v1; add the enum value when it's needed |
+| `users.is_disabled` | column | not present | `revoked_at` on tokens covers the urgent case; user-level disable can be added when needed |
+| `teams.parent_team` / `cost_center` | columns | not present | Hierarchy + cost-center routing aren't on the v1 critical path |
+| `api_tokens.token_prefix` | column for display | not present | Defer until SPA renders "recently issued" with last-4 |
+| `users.user_id` / `teams.team_id` | TEXT primary keys | `BIGSERIAL` `id` (with `email` UNIQUE on users, `name` UNIQUE on teams) | Numeric PKs simplify FK joins; email/name remain natural keys via UNIQUE |
+| `audit_log` | table not in original §9 | shipped, append-only enforced via DB rules | Worth shipping early because admin actions start in 0.3.6 |
+| `budgets` | flat row per scope | append-only by `effective_from` (history kept) | Audit-friendly; current-budget is `MAX(effective_from) <= now()` |
+
+The SQL below is the **aspirational** target. Read `init/002_auth.sql` for the **as-landed** v1 schema.
+
 ```sql
 CREATE TABLE users (
    user_id        TEXT        PRIMARY KEY,    -- email
