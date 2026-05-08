@@ -941,7 +941,8 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 - ✅ 0.3.6 JWT minting + `api_tokens` table reads — merged to `main` ([`7744cff`](https://github.com/vilosource/agent-spend-dashboard/commit/7744cff)). `requireAuth` middleware accepts both cookie and bearer; the bearer path validates against `api_tokens` with the SHA-256 hash + partial unique index from D14.
 - ✅ 0.3.7 OTLP `/v1/traces` ingest — merged to `main` ([`47bedcf`](https://github.com/vilosource/agent-spend-dashboard/commit/47bedcf)). API absorbs the bridge: `POST /v1/traces` mounted with `requireAuth` (bearer-only, cookies rejected), pure transform mirrors `bridge.py`, batch `INSERT` into `agent_spend_logs`. D6 sunset condition met.
 - ✅ 0.3.8 sunset bridge from prod compose — Collector + bridge removed from `compose.yml`; both retained in `compose.override.yml` as OTel-pipeline regression fixtures (see §7.4). The production recipe is now exactly postgres + api + grafana.
-- 🟡 0.3.9 SPA: Login + `/me` page — next. The "I can see my own data" milestone.
-- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.9.)
+- ✅ 0.3.9 SPA: Login + `/me` page — merged to `main` (backend [`3eedb9c`](https://github.com/vilosource/agent-spend-dashboard/commit/3eedb9c) + SPA [`42e7653`](https://github.com/vilosource/agent-spend-dashboard/commit/42e7653)). The **"I can see my own data" milestone** — Svelte 5 + Tailwind 4 + Vite SPA served by Express via `express.static`, with KPI cards / uPlot daily-cost / Chart.js model-mix / sessions table backed by `/api/me/usage` + `/api/me/sessions` and the `rowScope()` SQL helper.
+- 🟡 0.3.10 SPA: /install + token management — next.
+- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime.)
 
 Each subsequent phase ships as its own PR.
