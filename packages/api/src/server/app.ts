@@ -17,6 +17,7 @@
 
 import express, { type Express, type Request, type Response } from "express";
 import { VERSION } from "../shared/version.js";
+import { requireAuth } from "./auth/middleware.js";
 import type { OidcContext } from "./auth/oidc.js";
 import { authRoutes } from "./auth/routes.js";
 import { readSession } from "./auth/session.js";
@@ -39,19 +40,23 @@ export function createApp(deps: AppDeps): Express {
 
 	app.use("/auth", authRoutes(deps));
 
-	// Minimal `/api/me`: phase 0.3.3 ships just enough of an
-	// authenticated probe to verify the session cookie carries identity.
-	// The full /me page (with role + teams + last-seen) lands in 0.3.9.
-	app.get("/api/me", async (req, res) => {
-		const session = await readSession(req, deps.jwtSecret);
-		if (!session) {
-			res.status(401).json({ error: "unauthenticated" });
+	// /api/me — authenticated identity probe. Accepts either the session
+	// cookie (browser, stateless) or `Authorization: Bearer <jwt>` (CLI /
+	// extension / CI, validated against api_tokens). Both transports
+	// populate req.identity uniformly. The full /me page lands in 0.3.9.
+	const auth = requireAuth({ db: deps.db, jwtSecret: deps.jwtSecret });
+	app.get("/api/me", auth, (req, res) => {
+		const id = req.identity;
+		if (!id) {
+			res.status(500).json({ error: "identity not attached" });
 			return;
 		}
 		res.json({
-			email: session.email,
-			name: session.name,
-			role: session.role,
+			email: id.email,
+			name: id.name,
+			role: id.role,
+			tokenLabel: id.tokenLabel,
+			source: id.source,
 		});
 	});
 

@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import type { OidcContext } from "./auth/oidc.js";
-import type { Db, UserRole, UserRow } from "./db.js";
+import type { ActiveTokenRow, Db, InsertApiTokenInput, UserRole, UserRow } from "./db.js";
 
 /**
  * createApp's deps include a real OidcContext and a Db. For the
- * non-auth surface (`/health`, `/`, anonymous `/api/me`) we don't need
- * either to actually function — only their shapes — so we cast minimal
- * placeholders. Auth-flow integration is covered separately by
- * auth/auth.test.ts which spins up a real Dex via testcontainers.
+ * non-auth surface (`/health`, `/`, unauthenticated `/api/me`) we don't
+ * need either to actually function — only their shapes — so we cast
+ * minimal placeholders. The full OIDC flow is covered by
+ * auth/oidc.integration.test.ts (testcontainers); the requireAuth
+ * middleware is unit-tested in auth/middleware.test.ts.
  */
 function makeFakeDb(): Db {
 	const users: UserRow[] = [];
@@ -19,11 +20,22 @@ function makeFakeDb(): Db {
 		async findUserByEmail(email) {
 			return users.find((u) => u.email === email) ?? null;
 		},
+		async findUserIdByEmail() {
+			return null;
+		},
 		async insertUser({ email, name, role }: { email: string; name: string | null; role: UserRole }) {
 			const row: UserRow = { email, name, role };
 			users.push(row);
 			return row;
 		},
+		async findActiveTokenByHash(): Promise<ActiveTokenRow | null> {
+			return null;
+		},
+		async markTokenUsed() {},
+		async insertApiToken(_input: InsertApiTokenInput) {
+			return { id: 0 };
+		},
+		async revokeApiToken() {},
 		async close() {},
 	};
 }
@@ -72,12 +84,12 @@ describe("createApp", () => {
 		});
 	});
 
-	it("GET /api/me returns 401 when no session cookie", async () => {
+	it("GET /api/me returns 401 when no token", async () => {
 		await withRunningApp(async (baseUrl) => {
 			const res = await fetch(`${baseUrl}/api/me`);
 			expect(res.status).toBe(401);
 			const body = (await res.json()) as { error: string };
-			expect(body.error).toBe("unauthenticated");
+			expect(body.error).toBe("no token");
 		});
 	});
 

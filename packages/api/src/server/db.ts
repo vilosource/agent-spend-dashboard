@@ -2,11 +2,10 @@
  * Postgres connection pool, wrapped behind a thin interface (`Db`) so
  * tests can swap in an in-memory fake without touching `pg`.
  *
- * The interface exposes only the three ops the auth layer needs in
- * phase 0.3.3: count users (for the first-user-becomes-admin bootstrap),
- * find user by email (for repeat logins), insert user (for new logins).
- *
- * Schema: see deploy/docker-compose/postgres/init/002_auth.sql.
+ * Phase 0.3.3 added the user ops (count/find/insert) for the OIDC
+ * bootstrap. Phase 0.3.6 adds the api_tokens ops the requireAuth
+ * middleware (bearer path) needs. Schema: see
+ * deploy/docker-compose/postgres/init/002_auth.sql.
  */
 
 import { Pool as PgPool, type Pool } from "pg";
@@ -19,10 +18,43 @@ export interface UserRow {
 	readonly role: UserRole;
 }
 
+/**
+ * Minimal projection of `api_tokens` rows the auth middleware needs.
+ * Joined to `users` so we can attach the user's email + role to the
+ * request without a second query.
+ */
+export interface ActiveTokenRow {
+	readonly tokenId: number;
+	readonly userId: number;
+	readonly label: string;
+	readonly email: string;
+	readonly role: UserRole;
+}
+
+export interface InsertApiTokenInput {
+	readonly userId: number;
+	readonly label: string;
+	readonly tokenHash: string;
+	readonly expiresAt: Date;
+}
+
 export interface Db {
 	countUsers(): Promise<number>;
 	findUserByEmail(email: string): Promise<UserRow | null>;
 	insertUser(input: { email: string; name: string | null; role: UserRole }): Promise<UserRow>;
+	/**
+	 * Look up a non-revoked, non-expired api_tokens row by its SHA-256
+	 * hash. Joined to `users` so the caller gets identity in one query.
+	 */
+	findActiveTokenByHash(tokenHash: string): Promise<ActiveTokenRow | null>;
+	/** Inline `last_used_at = now()` per D14; batching deferred to 0.3.7. */
+	markTokenUsed(tokenId: number): Promise<void>;
+	/** Insert a token row. Used by tests today; by the SPA Install page in 0.3.10. */
+	insertApiToken(input: InsertApiTokenInput): Promise<{ id: number }>;
+	/** Soft-revoke. Used by tests today; by the SPA Settings → Tokens page in 0.3.10. */
+	revokeApiToken(tokenId: number): Promise<void>;
+	/** Find a user's numeric id by email. Used by 0.3.10's token issuance. */
+	findUserIdByEmail(email: string): Promise<number | null>;
 	close(): Promise<void>;
 }
 
@@ -53,6 +85,67 @@ export function createDb(databaseUrl: string): Db {
 			const row = rows[0];
 			if (!row) throw new Error("INSERT users RETURNING produced no row");
 			return { email: row.email, name: row.name, role: row.role };
+		},
+
+		async findUserIdByEmail(email: string) {
+			const { rows } = await pool.query<{ id: string }>("SELECT id::text AS id FROM users WHERE email = $1", [
+				email,
+			]);
+			const row = rows[0];
+			return row ? Number.parseInt(row.id, 10) : null;
+		},
+
+		async findActiveTokenByHash(tokenHash: string) {
+			// Partial unique index on api_tokens(token_hash) WHERE revoked_at IS NULL
+			// (D14) makes this an index-only seek for the live-token case.
+			const { rows } = await pool.query<{
+				token_id: string;
+				user_id: string;
+				label: string;
+				email: string;
+				role: UserRole;
+			}>(
+				`SELECT t.id::text   AS token_id,
+				        t.user_id::text AS user_id,
+				        t.label,
+				        u.email,
+				        u.role
+				   FROM api_tokens t
+				   JOIN users u ON u.id = t.user_id
+				  WHERE t.token_hash = $1
+				    AND t.revoked_at IS NULL
+				    AND t.expires_at > now()`,
+				[tokenHash],
+			);
+			const row = rows[0];
+			if (!row) return null;
+			return {
+				tokenId: Number.parseInt(row.token_id, 10),
+				userId: Number.parseInt(row.user_id, 10),
+				label: row.label,
+				email: row.email,
+				role: row.role,
+			};
+		},
+
+		async markTokenUsed(tokenId: number) {
+			await pool.query("UPDATE api_tokens SET last_used_at = now() WHERE id = $1", [tokenId]);
+		},
+
+		async insertApiToken({ userId, label, tokenHash, expiresAt }) {
+			const { rows } = await pool.query<{ id: string }>(
+				`INSERT INTO api_tokens (user_id, label, token_hash, expires_at)
+				 VALUES ($1, $2, $3, $4)
+				 RETURNING id::text AS id`,
+				[userId, label, tokenHash, expiresAt],
+			);
+			const row = rows[0];
+			if (!row) throw new Error("INSERT api_tokens RETURNING produced no row");
+			return { id: Number.parseInt(row.id, 10) };
+		},
+
+		async revokeApiToken(tokenId: number) {
+			await pool.query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [tokenId]);
 		},
 
 		async close() {

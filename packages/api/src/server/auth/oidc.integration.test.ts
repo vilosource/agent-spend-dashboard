@@ -22,11 +22,15 @@ import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SignJWT } from "jose";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 import { createDb, type Db } from "../db.js";
 import { configureOidc } from "./oidc.js";
+import { sha256Hex } from "./tokens.js";
+
+const JWT_SECRET = "test-secret";
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const SCHEMA_FILES = [
@@ -74,10 +78,12 @@ describe("OIDC end-to-end against Dex", () => {
 				email: "lab-admin@example.invalid",
 				password: "lab",
 			});
-			expect(adminMe).toEqual({
+			expect(adminMe).toMatchObject({
 				email: "lab-admin@example.invalid",
 				name: "lab-admin",
 				role: "admin",
+				source: "cookie",
+				tokenLabel: "browser",
 			});
 			expect(await e.db.countUsers()).toBe(1);
 
@@ -85,12 +91,76 @@ describe("OIDC end-to-end against Dex", () => {
 				email: "lab-user@example.invalid",
 				password: "lab",
 			});
-			expect(userMe).toEqual({
+			expect(userMe).toMatchObject({
 				email: "lab-user@example.invalid",
 				name: "lab-user",
 				role: "developer",
+				source: "cookie",
+				tokenLabel: "browser",
 			});
 			expect(await e.db.countUsers()).toBe(2);
+		},
+		TEST_TIMEOUT,
+	);
+
+	it(
+		"bearer path: api_tokens row authenticates /api/me; revoke causes 401",
+		async () => {
+			if (!env) throw new Error("test environment failed to set up");
+			const e = env;
+
+			// Pre-condition: at least one user row from the cookie-flow test
+			// above. The two its share state on purpose — we want to exercise
+			// the full lifecycle (login → mint machine token → use → revoke)
+			// against the SAME testcontainers env.
+			const userId = await e.db.findUserIdByEmail("lab-admin@example.invalid");
+			expect(userId, "the cookie-flow test must have created lab-admin first").not.toBeNull();
+
+			// Mint a JWT that mirrors what 0.3.10's "Install on this machine"
+			// flow will produce: standard claims + a longer expiry.
+			const secret = new TextEncoder().encode(JWT_SECRET);
+			const jwt = await new SignJWT({
+				email: "lab-admin@example.invalid",
+				name: "lab-admin",
+				role: "admin",
+				machine: "test-machine",
+			})
+				.setProtectedHeader({ alg: "HS256" })
+				.setSubject("lab-admin@example.invalid")
+				.setIssuedAt()
+				.setExpirationTime("90d")
+				.sign(secret);
+
+			const tokenHash = sha256Hex(jwt);
+			const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+			const inserted = await e.db.insertApiToken({
+				userId: userId ?? 0,
+				label: "test-machine",
+				tokenHash,
+				expiresAt,
+			});
+
+			// Bearer call — no cookie, just Authorization.
+			const res = await fetch(`${e.baseUrl}/api/me`, {
+				headers: { authorization: `Bearer ${jwt}` },
+			});
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as Record<string, unknown>;
+			expect(body).toMatchObject({
+				email: "lab-admin@example.invalid",
+				name: "lab-admin",
+				role: "admin",
+				source: "bearer",
+				tokenLabel: "test-machine",
+			});
+
+			// Revoke; same bearer should now 401.
+			await e.db.revokeApiToken(inserted.id);
+			const revokedRes = await fetch(`${e.baseUrl}/api/me`, {
+				headers: { authorization: `Bearer ${jwt}` },
+			});
+			expect(revokedRes.status).toBe(401);
+			expect(((await revokedRes.json()) as { error: string }).error).toBe("revoked or expired");
 		},
 		TEST_TIMEOUT,
 	);
@@ -162,7 +232,7 @@ async function setupEnv(): Promise<Env> {
 
 	const app = createApp({
 		publicUrl: apiBaseUrl,
-		jwtSecret: "test-secret",
+		jwtSecret: JWT_SECRET,
 		oidc,
 		db,
 	});
