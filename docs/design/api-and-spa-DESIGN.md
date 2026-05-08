@@ -62,7 +62,7 @@ A single Express service in TypeScript that:
 2. **S2** — A new developer can install pi-usage-reporter from the SPA's "Install" page in under 60 seconds, with their identity asserted by the API (not by `git config`).
 3. **S3** — An admin can revoke a developer's machine token from the SPA; within 60 seconds the extension on that machine stops being able to write to the dashboard.
 4. **S4** — The `agent_spend_logs` table never receives a row whose `user_id` was not asserted by a valid, non-revoked JWT.
-5. **S5** — Lab developers can run the full stack (`make lab && make seed`) and reach the SPA at `http://localhost:8080` without any external IdP dependency.
+5. **S5** — Lab developers can run the full stack (`make lab && make seed`) and reach the SPA at `http://localhost:7080` without any external IdP dependency.
 6. **S6** — The bridge container is removed from the production-recipe Compose file; the lab still runs the Collector for OTel pipeline tests, but the production path is API-direct.
 
 
@@ -654,7 +654,7 @@ sequenceDiagram
 For the local lab, no SSO. The CLI generates a self-signed lab token and writes the config:
 
 ```bash
-pi-usage login --lab --endpoint http://localhost:8080
+pi-usage login --lab --endpoint http://localhost:7080
 # → writes ~/.config/pi-usage/config.json with a lab token
 ```
 
@@ -783,7 +783,7 @@ services:
 services:
    api:
       environment:
-         PUBLIC_URL: http://localhost:8080
+         PUBLIC_URL: http://localhost:7080
          JWT_SECRET: lab-jwt-secret-not-for-production
          OIDC_ISSUER_URL: http://idp:5556
          OIDC_CLIENT_ID: agent-spend

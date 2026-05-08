@@ -10,20 +10,38 @@
 
 name: agent-spend
 
+# Port mapping policy (per the "do we need to expose Postgres" discussion):
+#
+#   Tier 1 — always exposed (real user-facing surfaces):
+#     7000  Grafana       (browser)
+#     7080  API           (browser, and after phase 0.3.7 the OTLP target for host pi)
+#
+#   Tier 2 — transitional, retires at phase 0.3.8 (bridge sunset):
+#     7018  OTel Collector OTLP/HTTP   (only consumer is host pi until /v1/traces lands on the API)
+#
+#   Tier 3 — not exposed; Compose-internal only:
+#     Postgres            → use `make psql` (which does docker compose exec)
+#     OTLP gRPC :4317     → no consumer
+#     Collector health    → wait-healthy in Makefile uses Compose status, not host probe
+#
+# All container-internal ports stay at their defaults so service-to-service
+# DNS works (postgres:5432, collector:4318, grafana:3000, api:8080).
+# Only the host-side mapping changes.
+
 services:
    postgres:
       environment:
          POSTGRES_USER: agent_spend
          POSTGRES_PASSWORD: dev
          POSTGRES_DB: agent_spend
-      ports:
-         - "5432:5432"
+      # No host port mapping — use `make psql` for ad-hoc queries.
 
    collector:
       ports:
-         - "4317:4317"   # OTLP gRPC
-         - "4318:4318"   # OTLP HTTP
-         - "13133:13133" # health check
+         - "7018:4318"   # OTLP HTTP — transitional; host pi sends here until
+                          # phase 0.3.8 (bridge sunset). After 0.3.8, host pi
+                          # posts to the API at :7080/v1/traces and this mapping
+                          # is removed.
       # The collector image runs as a non-root user but the otel-spans volume
       # is root-owned by Docker on first creation. Run the collector as root
       # in the lab to keep the file/spans exporter working without volume
@@ -71,11 +89,9 @@ services:
          GF_USERS_ALLOW_SIGN_UP: "false"
          GF_NEWS_NEWS_FEED_ENABLED: "false"
       ports:
-         - "3000:3000"
+         - "7000:3000"
 
-   # API service — port mapped to host 8090 in the lab to avoid conflict with
-   # other developer-machine services that often grab 8080. The container
-   # internal port stays at 8080.
+   # API service — host port 7080. Container internal port stays at 8080.
    api:
       ports:
-         - "8090:8080"
+         - "7080:8080"

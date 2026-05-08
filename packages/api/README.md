@@ -60,6 +60,6 @@ In the lab Compose stack, the `api` service builds from this directory's Dockerf
 | Env var | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | TCP port to listen on |
-| `PUBLIC_URL` | `http://localhost:8080` | what the API advertises (used later by OAuth callbacks) |
+| `PUBLIC_URL` | `http://localhost:8080` | what the API advertises (used later by OAuth callbacks). In the lab the host-side URL is `http://localhost:7080`; inside the container it's `:8080`. |
 
 Auth-related env vars (`OIDC_*`, `JWT_SECRET`, `LAB_NO_AUTH`) are documented in [`docs/strategy/authentication-STRATEGY.md`](../../docs/strategy/authentication-STRATEGY.md) but not consumed yet — they land in phase 0.3.3.
