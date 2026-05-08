@@ -925,7 +925,8 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 - ✅ 0.3.3 OIDC against Dex — merged to `main` ([`63eb3a9`](https://github.com/vilosource/agent-spend-dashboard/commit/63eb3a9))
 - ⏭ 0.3.4 GitHub adapter — deferred (not on the Optiscan critical path; revisit when an external-contractor scenario actually needs it)
 - ✅ 0.3.6 JWT minting + `api_tokens` table reads — merged to `main` ([`7744cff`](https://github.com/vilosource/agent-spend-dashboard/commit/7744cff)). `requireAuth` middleware accepts both cookie and bearer; the bearer path validates against `api_tokens` with the SHA-256 hash + partial unique index from D14.
-- 🟡 0.3.7 OTLP `/v1/traces` ingest — next. Mounts `requireAuth` on the route and reads `req.identity` for the authenticated user.
-- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.7 → 0.3.9.)
+- ✅ 0.3.7 OTLP `/v1/traces` ingest — merged to `main` ([`47bedcf`](https://github.com/vilosource/agent-spend-dashboard/commit/47bedcf)). API absorbs the bridge: `POST /v1/traces` mounted with `requireAuth` (bearer-only, cookies rejected), pure transform mirrors `bridge.py`, batch `INSERT` into `agent_spend_logs`. D6 sunset condition met.
+- 🟡 0.3.8 sunset bridge from prod compose — next (remove Collector + bridge from `compose.yml`; lab `compose.override.yml` keeps them as OTel-pipeline regression fixtures).
+- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.8 → 0.3.9.)
 
 Each subsequent phase ships as its own PR.
