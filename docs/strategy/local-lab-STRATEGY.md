@@ -339,13 +339,15 @@ This path is documented but never the default: it requires the developer to cons
 
 For SSO development without a real OIDC provider, the lab includes [Dex](https://dexidp.io/) as a Compose service. Dex is small (~30 MB image), boots in seconds, and is purpose-built for "local OIDC for a service to test against."
 
+Per the [authentication strategy](authentication-STRATEGY.md), the lab default uses **Dex with real OIDC** — the same code path that runs in production, just with a different IdP behind it. This catches OIDC bugs early. A `LAB_NO_AUTH=true` escape hatch skips OIDC entirely for scripted runs and demos where the auth flow is incidental.
+
 Configuration in `lab/idp/dex-config.yaml`:
 
 - One static client: `client_id=agent-spend`, `client_secret=lab-secret`, redirect URI `http://localhost:8080/auth/callback`.
 - One static user: email `lab-admin@example.invalid`, password `admin`, claims `{ "team": "platform", "role": "admin" }`.
 - One additional user: `lab-user@example.invalid` / `user`, `{ "team": "platform", "role": "developer" }`.
 
-The API service in the lab is configured with `OIDC_ISSUER_URL=http://idp:5556` (Compose-network DNS), `OIDC_CLIENT_ID=agent-spend`, `OIDC_CLIENT_SECRET=lab-secret`. The user logs into the SPA in their browser, gets bounced through Dex, lands back in the SPA authenticated as either admin or developer — exercising the full RBAC code path.
+The API service in the lab is configured with `OIDC_ISSUER_URL=http://idp:5556` (Compose-network DNS), `OIDC_CLIENT_ID=agent-spend`, `OIDC_CLIENT_SECRET=lab-secret`. The user logs into the SPA in their browser, gets bounced through Dex, lands back in the SPA authenticated as either admin or developer — exercising the full RBAC code path. (Per [`authentication-STRATEGY.md`](authentication-STRATEGY.md) §5, the same env vars point at any OIDC IdP in production deployments.)
 
 Dex is **lab-only**. Production deployments use Entra / Google / Okta / Auth0 / Keycloak / their own Dex / etc. — anything OIDC-compliant. The `compose.yml` doesn't include Dex; only `compose.override.yml` does.
 

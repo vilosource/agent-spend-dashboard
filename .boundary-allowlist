@@ -18,3 +18,9 @@ scripts/check-public-boundary.sh
 # that this repo is the harness-agnostic reference server, not any one
 # organization's private deployment.
 README.md
+
+# Design doc references Optiscan in the scope-clarification banner
+# ("Production deployment specifics for any organization (Optiscan
+# or otherwise) — those live in private deployment repos"). The
+# naming is intentional and clarifies the doc's audience.
+docs/design/api-and-spa-DESIGN.md

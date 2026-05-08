@@ -104,3 +104,88 @@ The dashboards we ship today match the org/team/ops view targeted by the design 
 - Org Overview: total cost $9.41 across 8 model variants; subscription split visible
 - By Team: $5.52 / $2.84 / $1.05 across 3 teams
 - Burn Rate: long-running session detector flags 5 sessions > 23 h
+
+---
+
+## 2026-05-08 · D6 · API absorbs the bridge (sunsets D4)
+
+**Decision:** The Agent Spend API service exposes `/v1/traces` as a direct OTLP/HTTP ingest endpoint, validating bearer JWTs and writing to `agent_spend_logs` directly. On the production-recipe Compose stack (`compose.yml`), the OTel Collector and `bridge.py` are removed. They remain in the lab's `compose.override.yml` to exercise the standard OTel pipeline (filter / redact / batch / export) for regression testing.
+
+**Scope:** `compose.yml` (production recipe) and `compose.override.yml` (lab); the API service per [`docs/design/api-and-spa-DESIGN.md`](../design/api-and-spa-DESIGN.md) §7.
+
+**Sunsets:** [D4](decisions-LOG.md) — the bridge was always meant to be temporary, with this exact sunset condition documented at the time. v1 of the API meets that condition.
+
+**Rationale:** Three reasons to do the direct path on production:
+
+1. The auth boundary is in one place. The API validates JWTs; the Collector would have to too if we kept it on the production path, doubling the auth surface.
+2. The bridge was a Python script with no auth, no schema validation beyond skipping spans missing required attributes, and no upgrade story. The API absorbs all of those concerns into a service that's already maintained for the SPA.
+3. The Collector's actual value (filter / redact / batch / fan-out to multiple backends) can be replicated trivially in the API for our specific extension because we know the schema. Production deployments that have an existing OTel Collector in front of everything can still chain ours behind it via OTLP — the API speaks OTLP, so it's interchangeable.
+
+The lab keeps the Collector + bridge specifically to **catch regressions in the standard OTel pipeline**. If a third-party emitter ever tried to push to a deployment that does run a Collector in front, those tests are what validate the path works.
+
+---
+
+## 2026-05-08 · D7 · OIDC for all authentication; multi-IdP at v1
+
+**Decision:** The reference dashboard server authenticates users via OIDC. v1 first-class targets: Entra ID, Google Workspace, GitHub (via OAuth + adapter), Dex (lab). Any other OIDC-compliant IdP (Okta, Auth0, Keycloak, AWS Cognito, AWS IAM Identity Center, etc.) works without code changes — only env vars differ.
+
+The lab default is Dex with hardcoded users (exercises real OIDC against a real IdP). A `LAB_NO_AUTH=true` escape hatch skips auth entirely for scripted runs.
+
+**Scope:** API service. Per the [authentication strategy](authentication-STRATEGY.md), this concern is at the strategy level rather than buried in component design because future extensions for other harnesses will reuse the same auth model.
+
+**Rationale:** OIDC is the standard auth protocol layered on OAuth 2.0; every major IdP speaks it. One library (`openid-client`) + one code path serve every OIDC IdP. Configuration is environment variables. The application binary is identical for every deploying organization; only the env vars change.
+
+GitHub is the only special case because GitHub's OAuth predates OIDC. Handled with a small adapter (~30 LOC) that calls `GET /user` after the token exchange.
+
+Multi-IdP within a single deployment is out of scope — federation lives one layer up in the IdP itself.
+
+---
+
+## 2026-05-08 · D8 · Identity from JWT claims; `git config` fallback removed
+
+**Decision:** The `user_id` written to `agent_spend_logs` comes from the JWT claim asserted by our API after a successful OIDC flow. The extension's `agent.user.id` attribute is no longer used as identity ground truth — it's logged for audit only.
+
+The pi-extension's current resolution chain (`PI_USAGE_USER_ID` env → `git config --global user.email` → `${USER}@${hostname}`) is removed. Instead, the extension reads its bearer token from `~/.config/pi-usage/config.json`; identity is encoded in the token, validated and extracted by the API.
+
+**Scope:** Both [`packages/pi-usage-reporter/src/extension/identity.ts`](https://github.com/vilosource/pi-extensions/blob/main/packages/pi-usage-reporter/src/extension/identity.ts) (resolver simplifies dramatically) and the API's auth middleware (extracts `sub`/`email` from JWT for every OTLP request).
+
+**Rationale:** Today, anyone can forge any identity by setting `PI_USAGE_USER_ID=ceo@example.com` before launching pi. Fine for a lab; not fine for any deployed environment. With the JWT-claims model:
+
+1. The extension's outbound OTLP request includes `Authorization: Bearer <jwt>`.
+2. The API verifies the signature with `JWT_SECRET`.
+3. The API looks up the token row by hash; rejects if revoked or expired.
+4. The API takes `user_id` from the JWT's `sub`/`email` claim, not from any `agent.user.id` attribute the extension sent.
+
+**Recorded as D13 in the pi-extensions decisions log** (the same decision applies on both sides of the wire).
+
+---
+
+## 2026-05-08 · D9 · Per-machine tokens (one user → many machines, each revocable)
+
+**Decision:** When a developer clicks "Install" in the SPA, they name the machine ("alice-laptop", "alice-desktop", "ci-runner-prod") and the API mints a JWT scoped to (user, machine) with a 90-day TTL. Every active token has a row in `api_tokens` with a name, last-seen timestamp, and revoke button.
+
+**Scope:** API service `api_tokens` table; SPA Settings → Tokens page; CLI `pi-usage logout` revokes the local machine's token.
+
+**Rationale:** Reality check: a developer has 3-5 machines they use pi on, plus CI runners. Single-token-per-user means revoking the lost laptop kicks the desktop offline too. Per-machine tokens match how the user actually uses the system. Standard pattern (GitHub, Tailscale, 1Password, modern CLIs in general).
+
+The API's auth middleware updates `last_seen_at` on every successful authenticated request, so admins can see when each machine last spoke and revoke stale tokens proactively.
+
+---
+
+## 2026-05-08 · D10 · Three install paths, one config file
+
+**Decision:** All three install paths produce the same `~/.config/pi-usage/config.json` `{ endpoint, token, machine_name }`. The extension reads only that file plus the `PI_USAGE_TOKEN` env var override.
+
+| Path | Use case | Mechanism |
+|---|---|---|
+| **A. SPA interactive** | normal developer onboarding | log into SPA → click Install → paste one-liner; SPA generates a per-machine JWT and embeds it in the install script |
+| **B. Lab** | local lab work without SSO | `pi-usage login --lab --endpoint http://localhost:8080`; CLI mints a self-signed lab token |
+| **C. CI** | CI runners and unattended machines | admin generates a long-lived token in the SPA, stores as `AGENT_SPEND_CI_TOKEN` secret; CI sets `PI_USAGE_TOKEN=$AGENT_SPEND_CI_TOKEN` |
+
+Plus a fourth path for terminal-only login: `pi-usage login` runs the **OAuth 2.0 Device Authorization Grant** (RFC 8628) — opens a URL on the user's browser, user pastes a code, CLI polls for completion. Standard flow; works on headless / CI machines without an interactive browser on the same host.
+
+**Scope:** API service (`/auth/device/*` endpoints, `/install/<token-id>` script renderer); pi-extensions CLI (`pi-usage login`, `pi-usage logout`, `pi-usage whoami`).
+
+**Rationale:** One config file shape covers every case; the install path is just "how did the file get written." Making a single shape work everywhere keeps the extension simple (one code path reads config) and the SPA UI honest (Install means writing this exact file).
+
+The privacy preview before install (Install page lists exactly what will be transmitted before the user pastes anything) is not legally required but is the kind of trust signal that costs little and is rare enough in enterprise telemetry that it's worth doing.
