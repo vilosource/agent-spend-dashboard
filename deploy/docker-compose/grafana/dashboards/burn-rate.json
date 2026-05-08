@@ -4,7 +4,7 @@
    "tags": ["agent-spend", "ops"],
    "timezone": "browser",
    "schemaVersion": 39,
-   "version": 1,
+   "version": 2,
    "refresh": "30s",
    "time": { "from": "now-24h", "to": "now" },
    "panels": [
@@ -88,7 +88,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT date_trunc('minute', ts) - (date_part('minute', ts)::int %% 5) * interval '1 minute' AS time, SUM(cost_total_usd) AS \"5min cost\" FROM agent_spend_logs WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1",
+               "rawSql": "SELECT $__timeGroup(ts, '5m') AS time, SUM(cost_total_usd) AS \"5min cost\" FROM agent_spend_logs WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1",
                "format": "time_series"
             }
          ]

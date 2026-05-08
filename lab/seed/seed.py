@@ -187,8 +187,15 @@ def main() -> None:
             session_id = str(uuid.uuid4())
             for turn in range(args.turns_per_user_per_day):
                 model = random.choice(MODELS)
-                # Distribute throughout the day with some clustering
-                ts_ns = day_start_ns + random.randint(0, day_ns - 1)
+                # Distribute throughout the day with some clustering.
+                # For the most-recent day, weight half the turns into the LAST 3 HOURS
+                # so the burn-rate dashboard's default 24h window shows a real cost
+                # rate signal instead of being mostly empty.
+                if day == args.days - 1 and turn < args.turns_per_user_per_day // 2:
+                    # Recent slice: last 3 hours
+                    ts_ns = now - random.randint(0, 3 * 3600 * 1_000_000_000)
+                else:
+                    ts_ns = day_start_ns + random.randint(0, day_ns - 1)
                 # Realistic-ish token counts
                 input_tokens = int(random.lognormvariate(7.0, 0.6))    # ~1100 mean
                 output_tokens = int(random.lognormvariate(5.5, 0.7))   # ~250 mean
