@@ -1,6 +1,11 @@
 {
-   "files": [],
-   "references": [
-      { "path": "packages/_template" }
-   ]
+	"files": [],
+	"references": [
+		{
+			"path": "packages/_template"
+		},
+		{
+			"path": "packages/api"
+		}
+	]
 }

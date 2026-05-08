@@ -1,0 +1,29 @@
+{
+	"name": "@vilosource/agent-spend-api",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Agent Spend API + SPA + OTLP ingest. Single Express service per docs/design/api-and-spa-DESIGN.md.",
+	"license": "MIT",
+	"main": "./dist/server/index.js",
+	"types": "./dist/server/index.d.ts",
+	"bin": {
+		"agent-spend-api": "./dist/server/cli.js"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc -b",
+		"start": "node ./dist/server/cli.js",
+		"test": "vitest run --dir src"
+	},
+	"dependencies": {
+		"express": "^5.0.1"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.0",
+		"vitest": "^3.0.0"
+	}
+}
