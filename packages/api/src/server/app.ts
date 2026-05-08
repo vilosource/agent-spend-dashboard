@@ -2,56 +2,76 @@
  * Express app factory.
  *
  * Per the design (§2.1), three URL spaces share one port:
- *   /          → SPA static bundle (placeholder for now)
- *   /health    → liveness probe
- *   /api/*     → REST (forthcoming)
- *   /auth/*    → OIDC (forthcoming)
- *   /v1/traces → OTLP ingest (forthcoming)
+ *   /              → SPA static bundle (placeholder for now)
+ *   /health        → liveness probe
+ *   /api/me        → authenticated identity probe (phase 0.3.3 minimal form)
+ *   /auth/login    → start OIDC flow
+ *   /auth/callback → finish OIDC flow, mint session cookie
+ *   /auth/logout   → clear session cookie
+ *   /v1/traces     → OTLP ingest (phase 0.3.7)
  *
- * For phase 0.3.1 only `/health` and a placeholder `/` exist.
- *
- * The factory pattern (rather than a global app) lets tests construct
- * isolated app instances without leaking state between tests, and it
- * keeps the IO (`listen`) separate from app construction so tests don't
- * need to bind ports.
+ * The factory pattern keeps IO (`listen`, db connections, OIDC
+ * discovery) separate from app construction so tests can wire a
+ * fake `Db` and a real-Dex `OidcContext` independently.
  */
 
 import express, { type Express, type Request, type Response } from "express";
 import { VERSION } from "../shared/version.js";
+import type { OidcContext } from "./auth/oidc.js";
+import { authRoutes } from "./auth/routes.js";
+import { readSession } from "./auth/session.js";
+import type { Db } from "./db.js";
 
 export interface AppDeps {
-	/** Public URL the API advertises. Used in the placeholder home page. */
 	readonly publicUrl: string;
+	readonly jwtSecret: string;
+	readonly oidc: OidcContext;
+	readonly db: Db;
 }
 
 export function createApp(deps: AppDeps): Express {
 	const app = express();
-
-	// Disable x-powered-by header — small but standard hardening.
 	app.disable("x-powered-by");
 
 	app.get("/health", (_req: Request, res: Response) => {
 		res.json({ status: "ok", version: VERSION });
 	});
 
-	app.get("/", (_req: Request, res: Response) => {
+	app.use("/auth", authRoutes(deps));
+
+	// Minimal `/api/me`: phase 0.3.3 ships just enough of an
+	// authenticated probe to verify the session cookie carries identity.
+	// The full /me page (with role + teams + last-seen) lands in 0.3.9.
+	app.get("/api/me", async (req, res) => {
+		const session = await readSession(req, deps.jwtSecret);
+		if (!session) {
+			res.status(401).json({ error: "unauthenticated" });
+			return;
+		}
+		res.json({
+			email: session.email,
+			name: session.name,
+			role: session.role,
+		});
+	});
+
+	app.get("/", async (req: Request, res: Response) => {
+		const session = await readSession(req, deps.jwtSecret);
 		res.set("Content-Type", "text/html; charset=utf-8");
-		res.send(renderPlaceholder(deps.publicUrl));
+		res.send(renderPlaceholder(deps.publicUrl, session));
 	});
 
 	return app;
 }
 
-/**
- * Placeholder home page rendered until the SPA bundle lands in phase 0.3.9.
- *
- * Pure: takes a string in, returns a string out. No IO, no template engine.
- * Lives here (in src/server/) rather than src/shared/ only because it's
- * server-rendered as part of the Express response, not a piece of pure
- * domain logic. If the page grows beyond a placeholder it should move to
- * its own module.
- */
-function renderPlaceholder(publicUrl: string): string {
+function renderPlaceholder(publicUrl: string, session: { email: string; role: string } | null): string {
+	const authBlock = session
+		? `<p>Logged in as <code>${htmlEscape(session.email)}</code> (role: <code>${htmlEscape(session.role)}</code>).
+		   <form method="POST" action="/auth/logout" style="display:inline">
+		      <button type="submit">Log out</button>
+		   </form></p>`
+		: `<p><a href="/auth/login">Log in</a> via the configured OIDC provider.</p>`;
+
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -67,15 +87,20 @@ function renderPlaceholder(publicUrl: string): string {
 <body>
    <h1>Agent Spend</h1>
    <p>The reference dashboard server is running. Version <code>${VERSION}</code>.</p>
+   ${authBlock}
    <p>The SPA is not yet present in this build — it lands in phase 0.3.9.
       For now you can:</p>
    <ul>
       <li>Check liveness at <a href="/health"><code>/health</code></a></li>
+      <li>Hit <a href="/api/me"><code>/api/me</code></a> to see the authenticated identity (or 401).</li>
       <li>Browse the <a href="https://github.com/vilosource/agent-spend-dashboard">project on GitHub</a></li>
-      <li>See dashboards in Grafana at <a href="http://localhost:3000">localhost:3000</a> (when running the lab)</li>
    </ul>
-   <p class="meta">This page served from <code>${publicUrl}</code>.</p>
+   <p class="meta">This page served from <code>${htmlEscape(publicUrl)}</code>.</p>
 </body>
 </html>
 `;
+}
+
+function htmlEscape(s: string): string {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }

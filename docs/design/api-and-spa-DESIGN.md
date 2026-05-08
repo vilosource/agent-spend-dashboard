@@ -772,21 +772,25 @@ The `audit_log` is the answer to [success criterion S5 of the original design](h
 
 The lab override gains the `api`, `dex`, and (still) `bridge` services. Production recipe gets `api` + `dex`-replacement (the deploying organization's IdP). Sketch:
 
+App-specific env vars carry the `AGENT_SPEND_` prefix so a deploying organization doesn't have to namespace generic-sounding names like `JWT_SECRET` or `OIDC_ISSUER_URL` against other apps on the same host (D13).
+
 ```yaml
 # deploy/docker-compose/compose.yml
 services:
    postgres: # unchanged
    api:
-      build: ../../service
+      build:
+         context: ../..
+         dockerfile: packages/api/Dockerfile
       restart: unless-stopped
       environment:
          DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-         PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env}
-         JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-         OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL in .env}
-         OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in .env}
-         OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in .env}
-         LAB_NO_AUTH: ${LAB_NO_AUTH:-false}
+         PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+         AGENT_SPEND_JWT_SECRET: ${AGENT_SPEND_JWT_SECRET:?set AGENT_SPEND_JWT_SECRET in .env}
+         AGENT_SPEND_OIDC_ISSUER_URL: ${AGENT_SPEND_OIDC_ISSUER_URL:?set AGENT_SPEND_OIDC_ISSUER_URL in .env}
+         AGENT_SPEND_OIDC_CLIENT_ID: ${AGENT_SPEND_OIDC_CLIENT_ID:?set AGENT_SPEND_OIDC_CLIENT_ID in .env}
+         AGENT_SPEND_OIDC_CLIENT_SECRET: ${AGENT_SPEND_OIDC_CLIENT_SECRET:?set AGENT_SPEND_OIDC_CLIENT_SECRET in .env}
+         AGENT_SPEND_LAB_NO_AUTH: ${AGENT_SPEND_LAB_NO_AUTH:-false}   # phase 0.3.5
       depends_on:
          postgres:
             condition: service_healthy
@@ -800,18 +804,23 @@ services:
    api:
       environment:
          PUBLIC_URL: http://localhost:7080
-         JWT_SECRET: lab-jwt-secret-not-for-production
-         OIDC_ISSUER_URL: http://idp:5556
-         OIDC_CLIENT_ID: agent-spend
-         OIDC_CLIENT_SECRET: lab-secret
+         AGENT_SPEND_JWT_SECRET: lab-jwt-secret-not-for-production
+         AGENT_SPEND_OIDC_ISSUER_URL: http://idp.localhost:7019
+         AGENT_SPEND_OIDC_CLIENT_ID: agent-spend
+         AGENT_SPEND_OIDC_CLIENT_SECRET: lab-secret
+      # idp.localhost resolves to loopback on the host (RFC 6761) and via
+      # host-gateway in the api container; one canonical issuer URL works
+      # on both sides so OIDC's issuer-claim verification succeeds.
+      extra_hosts:
+         - "idp.localhost:host-gateway"
 
-   idp:   # Dex
+   idp:   # Dex (lab IdP)
       image: ghcr.io/dexidp/dex:v2.41.0
       command: ["dex", "serve", "/etc/dex/config.yaml"]
       volumes:
-         - ./dex/config.yaml:/etc/dex/config.yaml:ro
+         - ../../lab/idp/dex-config.yaml:/etc/dex/config.yaml:ro
       ports:
-         - "5556:5556"
+         - "7019:5556"
 
    # bridge + collector retained for OTel pipeline tests; not on production path.
 ```
@@ -885,6 +894,7 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 **Document status:** under active implementation. Phased delivery in §11:
 - ✅ 0.3.1 service skeleton — merged to `main` ([`345c2cc`](https://github.com/vilosource/agent-spend-dashboard/commit/345c2cc) on branch, [`2ef27f9`](https://github.com/vilosource/agent-spend-dashboard/commit/2ef27f9) merge)
 - ✅ 0.3.2 auth tables — merged to `main` ([`4e8520a`](https://github.com/vilosource/agent-spend-dashboard/commit/4e8520a) on branch, [`7595b01`](https://github.com/vilosource/agent-spend-dashboard/commit/7595b01) merge)
-- 🟡 0.3.3 OIDC against Dex — next
+- ✅ 0.3.3 OIDC against Dex — branch `feat/0.3.3-oidc-dex`; Dex compose service, openid-client + /auth routes (`/login`, `/callback`, `/logout`), session-cookie JWT, first-user-becomes-admin bootstrap, and a testcontainers integration test against real Dex
+- 🟡 0.3.4 GitHub adapter — next
 
 Each subsequent phase ships as its own PR.

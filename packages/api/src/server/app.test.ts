@@ -1,13 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
-
-const deps = { publicUrl: "http://localhost:8080" };
+import type { OidcContext } from "./auth/oidc.js";
+import type { Db, UserRole, UserRow } from "./db.js";
 
 /**
- * We use Node's built-in fetch against the app via supertest-style ad-hoc
- * binding: app.listen(0) lets the OS pick a free port. This avoids adding
- * supertest as a devDependency just for two tests.
+ * createApp's deps include a real OidcContext and a Db. For the
+ * non-auth surface (`/health`, `/`, anonymous `/api/me`) we don't need
+ * either to actually function — only their shapes — so we cast minimal
+ * placeholders. Auth-flow integration is covered separately by
+ * auth/auth.test.ts which spins up a real Dex via testcontainers.
  */
+function makeFakeDb(): Db {
+	const users: UserRow[] = [];
+	return {
+		async countUsers() {
+			return users.length;
+		},
+		async findUserByEmail(email) {
+			return users.find((u) => u.email === email) ?? null;
+		},
+		async insertUser({ email, name, role }: { email: string; name: string | null; role: UserRole }) {
+			const row: UserRow = { email, name, role };
+			users.push(row);
+			return row;
+		},
+		async close() {},
+	};
+}
+
+const deps = {
+	publicUrl: "http://localhost:8080",
+	jwtSecret: "test-secret",
+	oidc: {} as OidcContext,
+	db: makeFakeDb(),
+};
+
 async function withRunningApp<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
 	const app = createApp(deps);
 	const server = app.listen(0);
@@ -34,14 +61,33 @@ describe("createApp", () => {
 		});
 	});
 
-	it("GET / returns the placeholder HTML", async () => {
+	it("GET / returns the placeholder HTML with login link when anonymous", async () => {
 		await withRunningApp(async (baseUrl) => {
 			const res = await fetch(`${baseUrl}/`);
 			expect(res.status).toBe(200);
 			expect(res.headers.get("content-type")).toMatch(/text\/html/);
 			const body = await res.text();
 			expect(body).toContain("Agent Spend");
-			expect(body).toContain("phase 0.3.9");
+			expect(body).toContain("/auth/login");
+		});
+	});
+
+	it("GET /api/me returns 401 when no session cookie", async () => {
+		await withRunningApp(async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/api/me`);
+			expect(res.status).toBe(401);
+			const body = (await res.json()) as { error: string };
+			expect(body.error).toBe("unauthenticated");
+		});
+	});
+
+	it("POST /auth/logout clears the cookie and returns 204", async () => {
+		await withRunningApp(async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/auth/logout`, { method: "POST" });
+			expect(res.status).toBe(204);
+			const setCookie = res.headers.get("set-cookie") ?? "";
+			expect(setCookie).toMatch(/agent_spend_session=/);
+			expect(setCookie).toMatch(/Max-Age=0/i);
 		});
 	});
 

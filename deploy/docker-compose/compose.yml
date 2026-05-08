@@ -45,8 +45,12 @@ services:
 
    api:
       # Agent Spend API + SPA + OTLP ingest (per docs/design/api-and-spa-DESIGN.md).
-      # Phase 0.3.1 — only /health and a placeholder / are implemented;
-      # /api/*, /auth/*, /v1/traces land in subsequent phases.
+      # Phase 0.3.3 — /health, /, and /auth/{login,callback,logout} are
+      # implemented; /api/*, /v1/traces land in subsequent phases.
+      #
+      # The AGENT_SPEND_* prefix on app-specific env vars is an explicit
+      # convention so deploying organizations don't have to namespace
+      # generic-sounding names like JWT_SECRET against their other apps.
       build:
          context: ../..
          dockerfile: packages/api/Dockerfile
@@ -54,6 +58,11 @@ services:
       environment:
          PORT: 8080
          PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+         DATABASE_URL: postgresql://${POSTGRES_USER:-agent_spend}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent_spend}
+         AGENT_SPEND_JWT_SECRET: ${AGENT_SPEND_JWT_SECRET:?set AGENT_SPEND_JWT_SECRET in .env}
+         AGENT_SPEND_OIDC_ISSUER_URL: ${AGENT_SPEND_OIDC_ISSUER_URL:?set AGENT_SPEND_OIDC_ISSUER_URL in .env}
+         AGENT_SPEND_OIDC_CLIENT_ID: ${AGENT_SPEND_OIDC_CLIENT_ID:?set AGENT_SPEND_OIDC_CLIENT_ID in .env}
+         AGENT_SPEND_OIDC_CLIENT_SECRET: ${AGENT_SPEND_OIDC_CLIENT_SECRET:?set AGENT_SPEND_OIDC_CLIENT_SECRET in .env}
       depends_on:
          postgres:
             condition: service_healthy

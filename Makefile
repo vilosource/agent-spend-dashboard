@@ -15,19 +15,23 @@ COMPOSE     := docker compose --project-directory $(COMPOSE_DIR) \
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-lab: lab-up wait-healthy ## Bring the lab up (Postgres + Collector + bridge + Grafana + api), wait for healthy.
+lab: lab-up wait-healthy ## Bring the lab up (Postgres + Collector + bridge + Grafana + api + Dex), wait for healthy.
 	@echo
 	@echo "Lab is up:"
 	@echo "  Grafana:   http://localhost:7000  (anonymous viewer; admin/admin to log in)"
-	@echo "  API:       http://localhost:7080  (placeholder / and /health for phase 0.3.1)"
+	@echo "  API:       http://localhost:7080  (login at /auth/login → Dex)"
 	@echo
 	@echo "  For Postgres:  make psql  (no host port mapping by design)"
 	@echo "  Collector OTLP/HTTP (transitional, retires at 0.3.8):  http://localhost:7018"
+	@echo "  Dex (lab IdP, transitional):  http://idp.localhost:7019"
+	@echo
+	@echo "  Lab users:   lab-admin@example.invalid / lab"
+	@echo "               lab-user@example.invalid  / lab"
 	@echo
 	@echo "Run 'make seed' to populate with synthetic data."
 
 lab-up: ## docker compose up -d
-	$(COMPOSE) up -d --build postgres collector bridge grafana api
+	$(COMPOSE) up -d --build postgres collector bridge grafana api idp
 
 lab-down: ## docker compose down (keeps volumes)
 	$(COMPOSE) down

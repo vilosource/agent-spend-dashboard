@@ -1,0 +1,59 @@
+# Dex configuration for the local lab.
+#
+# Per docs/strategy/authentication-STRATEGY.md §5, the lab default is
+# real OIDC against Dex (not LAB_NO_AUTH) so the production code path
+# is exercised on every local run.
+#
+# Two static users are hardcoded — admin and a regular developer —
+# enough to exercise role-based behavior without any signup ceremony.
+# Passwords are bcrypt(`lab`); they are not secrets, see comment below.
+#
+# Issuer URL is `http://idp.localhost:7019` — this single URL must
+# resolve to Dex from both the browser AND the api container, because
+# OIDC requires the discovery doc's `issuer` claim to match what the
+# client used to fetch it.
+#
+#   • Browser side: glibc/musl resolve `*.localhost` to loopback
+#     automatically (RFC 6761), and Compose maps host port 7019 to
+#     this container's 5556.
+#   • API container side: extra_hosts in compose.override.yml maps
+#     `idp.localhost` to host-gateway.
+#
+# Both sides reach the same Dex; the issuer claim matches.
+
+issuer: http://idp.localhost:7019
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+# Skip the consent screen so the lab login is one-click. In production
+# the deploying organization's IdP applies its own consent policy.
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: agent-spend
+    name: "Agent Spend"
+    secret: lab-secret
+    redirectURIs:
+      - http://localhost:7080/auth/callback
+
+# Two hardcoded users. The bcrypt hashes are for the password "lab".
+# These are LAB ONLY — not secret in any meaningful sense; the whole
+# stack is bound to localhost. Production deployments swap this Dex
+# service for the deploying organization's real IdP.
+enablePasswordDB: true
+staticPasswords:
+  - email: "lab-admin@example.invalid"
+    # bcrypt of "lab"
+    hash: "$2b$10$6NXvTnAd7xVmMNPCkA6QQOPclAavo/lnLkFc4Bn4dkUH56pHZ.UVu"
+    username: "lab-admin"
+    userID: "0eb0e5f8-7e0e-4f9d-9c5b-000000000001"
+  - email: "lab-user@example.invalid"
+    # bcrypt of "lab"
+    hash: "$2b$10$nnTudZAPGLgZu.wqBBOiwe9616eBm.ogDapzfu54OpLocjbeDT84W"
+    username: "lab-user"
+    userID: "0eb0e5f8-7e0e-4f9d-9c5b-000000000002"

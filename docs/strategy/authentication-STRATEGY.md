@@ -64,7 +64,7 @@ Three things to note:
 
 ### 4.1 Per-IdP configuration
 
-The same three env vars (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`) cover every IdP except GitHub. Concrete values per IdP:
+The same three env vars (`AGENT_SPEND_OIDC_ISSUER_URL`, `AGENT_SPEND_OIDC_CLIENT_ID`, `AGENT_SPEND_OIDC_CLIENT_SECRET`) cover every IdP except GitHub. Concrete values per IdP:
 
 | IdP | `OIDC_ISSUER_URL` | Notes |
 |---|---|---|
@@ -76,19 +76,19 @@ The same three env vars (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRE
 | **AWS Cognito** | `https://cognito-idp.<region>.amazonaws.com/<pool-id>` | |
 | **AWS IAM Identity Center** (formerly AWS SSO) | `https://identitycenter.amazonaws.com/ssoins-<id>` | Good for organizations on AWS. |
 | **Keycloak** (self-hosted) | `https://<host>/realms/<realm>` | Good for organizations that want to self-host the IdP. |
-| **Dex** (lab / mock) | `http://idp:5556` | Used by the local lab. Hardcoded users; no signup. |
+| **Dex** (lab / mock) | `http://idp.localhost:7019` | Used by the local lab. Hardcoded users; no signup. The `idp.localhost` hostname resolves to loopback on the browser (RFC 6761) and via `extra_hosts: idp.localhost:host-gateway` inside the api container, so one canonical URL works on both sides. |
 | **GitHub** | (not OIDC; uses OAuth 2.0) | See §4.2. |
 
 ### 4.2 GitHub special case
 
 GitHub does not issue an ID token. After the OAuth code exchange, we call `https://api.github.com/user` to fetch the authenticated user, then map their `email` and `login` into our identity record.
 
-The application config switches into GitHub mode via `OIDC_PROVIDER=github`:
+The application config switches into GitHub mode via `AGENT_SPEND_OIDC_PROVIDER=github`:
 
 ```bash
-OIDC_PROVIDER=github
-GITHUB_CLIENT_ID=Iv1.<id>
-GITHUB_CLIENT_SECRET=<from-secret-manager>
+AGENT_SPEND_OIDC_PROVIDER=github
+AGENT_SPEND_GITHUB_CLIENT_ID=Iv1.<id>
+AGENT_SPEND_GITHUB_CLIENT_SECRET=<from-secret-manager>
 ```
 
 This is the only `if (provider === ...)` branch in the auth code. Every other IdP goes through the same OIDC code path.
@@ -112,9 +112,9 @@ flowchart LR
 
 | Mode | Use case | How |
 |---|---|---|
-| **Dex (default)** | Daily developer work; CI scenarios that exercise the auth code path | Lab `compose.override.yml` sets `OIDC_ISSUER_URL=http://idp:5556`; Dex container has two static users (`lab-admin@example.invalid`, `lab-user@example.invalid`) |
-| **`LAB_NO_AUTH=true`** | Scripted demos, smoke tests where the auth flow is incidental | API skips all auth; every request runs as `lab-developer@example.invalid`. Never used in production. |
-| **Production OIDC** | Any deployed environment | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` in env point at the deploying organization's IdP |
+| **Dex (default)** | Daily developer work; CI scenarios that exercise the auth code path | Lab `compose.override.yml` sets `AGENT_SPEND_OIDC_ISSUER_URL=http://idp.localhost:7019`; Dex container has two static users (`lab-admin@example.invalid`, `lab-user@example.invalid`) |
+| **`AGENT_SPEND_LAB_NO_AUTH=true`** | Scripted demos, smoke tests where the auth flow is incidental | API skips all auth; every request runs as `lab-developer@example.invalid`. Never used in production. *(Lands in phase 0.3.5.)* |
+| **Production OIDC** | Any deployed environment | `AGENT_SPEND_OIDC_ISSUER_URL`, `AGENT_SPEND_OIDC_CLIENT_ID`, `AGENT_SPEND_OIDC_CLIENT_SECRET` in env point at the deploying organization's IdP |
 
 The default is **Dex with real OIDC** — this exercises the production code path in development, so OIDC bugs surface early. `LAB_NO_AUTH` exists as an explicit escape, not a default.
 
@@ -124,8 +124,8 @@ The default is **Dex with real OIDC** — this exercises the production code pat
 
 After a successful login, the API:
 
-1. Mints a JWT signed with `JWT_SECRET` (HS256). Claims: `sub`, `email`, `name`, `role`, `teams`, `iat`, `exp`.
-2. Hashes the JWT with bcrypt; stores `(user_id, token_hash, name="browser-<short-id>", created_at, expires_at, last_seen_at)` in the `api_tokens` table.
+1. Mints a JWT signed with `AGENT_SPEND_JWT_SECRET` (HS256). Claims: `sub`, `email`, `name`, `role`, `teams`, `iat`, `exp`. The `AGENT_SPEND_` prefix avoids collisions with generic env-var names other apps on the same host might define (D13).
+2. Hashes the JWT with bcrypt; stores `(user_id, token_hash, name="browser-<short-id>", created_at, expires_at, last_seen_at)` in the `api_tokens` table. *(bcrypt hashing + api_tokens row writes land in phase 0.3.6; phase 0.3.3 ships only the cookie path.)*
 3. Sets the JWT as an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie.
 4. The SPA includes the cookie automatically on every request.
 
@@ -163,7 +163,7 @@ The token's expiry is also a hard upper bound; expired tokens are auto-rejected 
 **The user identity that lands in `agent_spend_logs.user_id` comes from the JWT signed by us, not from anything the extension's environment claims.** The extension cannot lie about who it is because:
 
 1. The extension's outbound OTLP request includes `Authorization: Bearer <jwt>`.
-2. The API verifies the signature with `JWT_SECRET`.
+2. The API verifies the signature with `AGENT_SPEND_JWT_SECRET`.
 3. The API looks up the token row by hash; rejects if revoked or expired.
 4. The API takes `user_id` from the JWT's `sub`/`email` claim, not from any `agent.user.id` attribute the extension sent.
 5. If a row arrives at the API, its identity is ground truth.

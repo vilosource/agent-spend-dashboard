@@ -245,3 +245,28 @@ When the first trigger fires, the next phase introduces the migration tool, keep
 - *Skip auth tables until we have a migration tool:* couples two phases unnecessarily; auth tables can sit unused while the API skeleton evolves.
 
 **Verified:** `make reset` re-creates all six tables (`agent_spend_logs` + `users` + `teams` + `api_tokens` + `budgets` + `audit_log`) cleanly; constraints behave (UNIQUE active label, CHECK monthly_usd >= 0, audit_log append-only via DB rules, updated_at trigger on users); seed re-emits 2800 rows; Grafana dashboards render unchanged.
+
+---
+
+## 2026-05-08 · D13 · `AGENT_SPEND_` prefix on app-specific env vars; `idp.localhost` for the lab OIDC issuer
+
+**Decision:** App-specific environment variables carry the `AGENT_SPEND_` prefix. The phase 0.3.3 auth surface is therefore: `AGENT_SPEND_JWT_SECRET`, `AGENT_SPEND_OIDC_ISSUER_URL`, `AGENT_SPEND_OIDC_CLIENT_ID`, `AGENT_SPEND_OIDC_CLIENT_SECRET`, and (in 0.3.5) `AGENT_SPEND_LAB_NO_AUTH`. Generic 12-factor names (`PORT`, `PUBLIC_URL`, `DATABASE_URL`) keep their conventional form.
+
+The lab's Dex IdP is reached via `http://idp.localhost:7019`. RFC 6761 reserves `*.localhost` to always resolve to loopback, so the browser side needs no `/etc/hosts` edits; the api container reaches the same URL via `extra_hosts: idp.localhost:host-gateway`. One canonical issuer URL works on both sides — OIDC's issuer-claim verification succeeds without any per-environment URL juggling.
+
+**Scope:** `deploy/docker-compose/compose.yml` and `compose.override.yml`, `deploy/docker-compose/.env(.example)`, `lab/idp/dex-config.yaml`, `packages/api/src/server/config.ts`, `docs/design/api-and-spa-DESIGN.md` §10, `docs/strategy/authentication-STRATEGY.md` §4–§6.
+
+**Rationale:** Two pragmatic choices, captured here so the next phase doesn't re-debate them:
+
+1. *App prefix.* `JWT_SECRET` is a name many other applications also reach for. A deploying organization that runs Agent Spend alongside, say, a different Node service that also reads `JWT_SECRET` would have to namespace one of them anyway. Doing it ourselves up front means the deployment env is unambiguous from day one and downstream tooling (Vault paths, Helm charts, GitHub-Actions secrets) gets the prefix for free.
+
+2. *idp.localhost.* The naïve approach — using `http://localhost:5556` in the lab — fails because `localhost` inside the api container resolves to the container's own loopback, not the host's Dex. The classic alternatives (`host.docker.internal` requires a `/etc/hosts` edit on Linux; `network_mode: host` breaks compose service DNS) all add friction. RFC 6761's `*.localhost` reservation gives us a hostname that resolves to loopback automatically on the browser, and Compose's `extra_hosts: host-gateway` gives us the same hostname inside the container. One URL, both sides reach Dex, OIDC's issuer-claim check is happy.
+
+**Rejected alternatives:**
+
+- *Keep generic env-var names (`JWT_SECRET`, `OIDC_*`):* mirrors the design doc's first draft. Discarded because every production-quality deployment has to namespace these against other services anyway; cleaner to do it once.
+- *`host.docker.internal` for Dex:* requires a one-time `/etc/hosts` edit on Linux for the host browser. Friction at first-clone is exactly what we're trying to avoid.
+- *`network_mode: host` for the api container:* lets `localhost:7019` work uniformly, but breaks Compose service DNS (api can no longer say `postgres:5432`).
+- *`*.localhost` without `extra_hosts`:* relies on glibc's automatic resolution inside the container, which would route to the container's own loopback rather than the host's Dex. `extra_hosts` is the missing piece.
+
+**Verified end-to-end:** Browser → `/auth/login` → 302 to Dex login form (Playwright); credentials accepted; redirect back to `/auth/callback` mints a session JWT cookie; `/api/me` returns `{email, name, role}`. Testcontainers integration test exercises the same flow against a fresh Dex + Postgres pair and asserts the first-user-becomes-admin / second-user-becomes-developer bootstrap (`packages/api/src/server/auth/oidc.integration.test.ts`). Full `npm run check` (lint + typecheck + depgraph + boundary + 27 tests) green on `feat/0.3.3-oidc-dex`.
