@@ -324,7 +324,7 @@ For end-to-end validation of the actual extension code path, a developer can als
 
 ```bash
 cd packages/pi-usage-reporter
-PI_USAGE_ENDPOINT=http://localhost:4318 \
+PI_USAGE_ENDPOINT=http://localhost:7018 \
 PI_USAGE_TOKEN=lab-token \
 PI_USAGE_USER_ID=$(git config user.email) \
 PI_USAGE_ENVIRONMENT=lab \
@@ -343,7 +343,7 @@ Per the [authentication strategy](authentication-STRATEGY.md), the lab default u
 
 Configuration in `lab/idp/dex-config.yaml`:
 
-- One static client: `client_id=agent-spend`, `client_secret=lab-secret`, redirect URI `http://localhost:8080/auth/callback`.
+- One static client: `client_id=agent-spend`, `client_secret=lab-secret`, redirect URI `http://localhost:7080/auth/callback`.
 - One static user: email `lab-admin@example.invalid`, password `admin`, claims `{ "team": "platform", "role": "admin" }`.
 - One additional user: `lab-user@example.invalid` / `user`, `{ "team": "platform", "role": "developer" }`.
 

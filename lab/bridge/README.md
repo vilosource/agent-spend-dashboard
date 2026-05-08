@@ -11,10 +11,13 @@ When the API service lands (phase 0.3), it absorbs this responsibility and the b
 ## Run
 
 ```bash
-pip install psycopg[binary]
+pip install 'psycopg[binary]'
+# Inside the lab Compose network, use 'postgres:5432' as the hostname.
+# From the host, Postgres is not exposed by default — use `make psql` for ad-hoc
+# queries (which goes through `docker compose exec`).
 python3 bridge.py \
    --spans /var/log/otel/spans.jsonl \
-   --dsn 'postgresql://<user>:<password>@localhost:5432/agent_spend'
+   --dsn 'postgresql://<user>:<password>@postgres:5432/agent_spend'
 ```
 
 It tails the JSONL file, parses each span, and inserts a row per assistant turn (skipping spans without `agent.user.id`).

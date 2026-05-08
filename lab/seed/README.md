@@ -10,7 +10,7 @@ Per [`local-lab-STRATEGY.md` §6.1](../../docs/strategy/local-lab-STRATEGY.md#61
 pip install requests
 
 python3 seed.py \
-   --endpoint http://localhost:4318 \
+   --endpoint http://localhost:7018 \
    --days 7 \
    --users 10 \
    --teams 3

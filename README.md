@@ -6,7 +6,7 @@ This repository is the **reference dashboard server** for the [scope-and-deploym
 
 ## Status
 
-**Lab + dashboards working.** The Compose stack (Postgres + OTel Collector + bridge + Grafana with three pre-built dashboards) and the synthetic emitter all live in this repo. End-to-end verified: `make lab && make seed` brings up a working local environment in under a minute and shows real graphs at <http://localhost:3000>.
+**Lab + dashboards working.** The Compose stack (Postgres + OTel Collector + bridge + Grafana with three pre-built dashboards + API skeleton) and the synthetic emitter all live in this repo. End-to-end verified: `make lab && make seed` brings up a working local environment in under a minute and shows real graphs at <http://localhost:7000>.
 
 What's not yet implemented:
 
@@ -35,7 +35,7 @@ Run the lab:
 ```bash
 make lab     # bring up Postgres + Collector + bridge + Grafana (~25s)
 make seed    # emit ~2800 synthetic spans (~5s)
-open http://localhost:3000   # browse the dashboards (anonymous viewer enabled)
+open http://localhost:7000   # browse the dashboards (anonymous viewer enabled)
 make psql    # poke around the agent_spend_logs table
 make clean   # tear everything down (irreversible)
 ```

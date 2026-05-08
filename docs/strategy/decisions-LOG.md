@@ -179,7 +179,7 @@ The API's auth middleware updates `last_seen_at` on every successful authenticat
 | Path | Use case | Mechanism |
 |---|---|---|
 | **A. SPA interactive** | normal developer onboarding | log into SPA → click Install → paste one-liner; SPA generates a per-machine JWT and embeds it in the install script |
-| **B. Lab** | local lab work without SSO | `pi-usage login --lab --endpoint http://localhost:8080`; CLI mints a self-signed lab token |
+| **B. Lab** | local lab work without SSO | `pi-usage login --lab --endpoint http://localhost:7080`; CLI mints a self-signed lab token |
 | **C. CI** | CI runners and unattended machines | admin generates a long-lived token in the SPA, stores as `AGENT_SPEND_CI_TOKEN` secret; CI sets `PI_USAGE_TOKEN=$AGENT_SPEND_CI_TOKEN` |
 
 Plus a fourth path for terminal-only login: `pi-usage login` runs the **OAuth 2.0 Device Authorization Grant** (RFC 8628) — opens a URL on the user's browser, user pastes a code, CLI polls for completion. Standard flow; works on headless / CI machines without an interactive browser on the same host.

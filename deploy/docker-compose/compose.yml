@@ -40,7 +40,8 @@ services:
       # The otelcol-contrib image has no curl/wget; in-container HTTP healthchecks
       # are not feasible. We rely on dependents using `condition: service_started`
       # and on the collector's own log output to confirm readiness. The Makefile's
-      # wait-healthy target probes http://localhost:13133/ from the host.
+      # wait-healthy target uses Compose status (not a host probe) since the
+      # collector's :13133 health endpoint is not exposed to the host.
 
    api:
       # Agent Spend API + SPA + OTLP ingest (per docs/design/api-and-spa-DESIGN.md).

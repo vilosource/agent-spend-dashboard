@@ -18,11 +18,11 @@ help: ## Show this help.
 lab: lab-up wait-healthy ## Bring the lab up (Postgres + Collector + bridge + Grafana + api), wait for healthy.
 	@echo
 	@echo "Lab is up:"
-	@echo "  Postgres:  postgresql://<user>:<password>@localhost:5432/agent_spend  (defaults from .env)"
-	@echo "  Collector: OTLP/HTTP at http://localhost:4318"
-	@echo "  Health:    http://localhost:13133"
-	@echo "  Grafana:   http://localhost:3000  (anonymous viewer enabled; admin/admin to log in)"
-	@echo "  API:       http://localhost:8090  (placeholder / and /health for phase 0.3.1)"
+	@echo "  Grafana:   http://localhost:7000  (anonymous viewer; admin/admin to log in)"
+	@echo "  API:       http://localhost:7080  (placeholder / and /health for phase 0.3.1)"
+	@echo
+	@echo "  For Postgres:  make psql  (no host port mapping by design)"
+	@echo "  Collector OTLP/HTTP (transitional, retires at 0.3.8):  http://localhost:7018"
 	@echo
 	@echo "Run 'make seed' to populate with synthetic data."
 
@@ -49,11 +49,11 @@ logs: ## Tail logs (use S=<service> to scope, e.g. make logs S=bridge).
 ps: ## docker compose ps
 	$(COMPOSE) ps
 
-wait-healthy: ## Wait up to 60s for postgres to be healthy and collector ready.
-	@echo "Waiting for postgres healthcheck and collector readiness..."
+wait-healthy: ## Wait up to 60s for postgres to be healthy and core services running.
+	@echo "Waiting for postgres healthcheck and core services to start..."
 	@for i in $$(seq 1 60); do \
 		PG_OK=$$($(COMPOSE) ps --format json postgres 2>/dev/null | grep -o '"Health":"healthy"' || true); \
-		COL_OK=$$(curl -sf http://localhost:13133/ -o /dev/null && echo ok || true); \
+		COL_OK=$$($(COMPOSE) ps --format json collector 2>/dev/null | grep -oE '"State":"running"' || true); \
 		if [ -n "$$PG_OK" ] && [ -n "$$COL_OK" ]; then \
 			echo "  ready."; \
 			exit 0; \
