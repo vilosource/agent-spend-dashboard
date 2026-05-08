@@ -924,7 +924,8 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 - ✅ 0.3.2 auth tables — merged to `main` ([`4e8520a`](https://github.com/vilosource/agent-spend-dashboard/commit/4e8520a) on branch, [`7595b01`](https://github.com/vilosource/agent-spend-dashboard/commit/7595b01) merge)
 - ✅ 0.3.3 OIDC against Dex — merged to `main` ([`63eb3a9`](https://github.com/vilosource/agent-spend-dashboard/commit/63eb3a9))
 - ⏭ 0.3.4 GitHub adapter — deferred (not on the Optiscan critical path; revisit when an external-contractor scenario actually needs it)
-- 🟡 0.3.6 JWT minting + `api_tokens` table reads — next on the critical path. Token-hashing strategy and the browser-vs-machine row policy resolved in D14.
-- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.6 → 0.3.7 → 0.3.9.)
+- ✅ 0.3.6 JWT minting + `api_tokens` table reads — merged to `main` ([`7744cff`](https://github.com/vilosource/agent-spend-dashboard/commit/7744cff)). `requireAuth` middleware accepts both cookie and bearer; the bearer path validates against `api_tokens` with the SHA-256 hash + partial unique index from D14.
+- 🟡 0.3.7 OTLP `/v1/traces` ingest — next. Mounts `requireAuth` on the route and reads `req.identity` for the authenticated user.
+- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.7 → 0.3.9.)
 
 Each subsequent phase ships as its own PR.
