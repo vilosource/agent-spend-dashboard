@@ -42,6 +42,27 @@ services:
       # and on the collector's own log output to confirm readiness. The Makefile's
       # wait-healthy target probes http://localhost:13133/ from the host.
 
+   grafana:
+      image: grafana/grafana-oss:11.4.0
+      restart: unless-stopped
+      environment:
+         GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+         GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+         GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS:-false}
+         # Pass the Postgres credentials through so the provisioned datasource
+         # can interpolate them.
+         POSTGRES_USER: ${POSTGRES_USER:-agent_spend}
+         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+         POSTGRES_DB: ${POSTGRES_DB:-agent_spend}
+      volumes:
+         - grafana-data:/var/lib/grafana
+         - ./grafana/provisioning:/etc/grafana/provisioning:ro
+         - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      depends_on:
+         postgres:
+            condition: service_healthy
+
 volumes:
    pg-data:
    otel-spans:
+   grafana-data:

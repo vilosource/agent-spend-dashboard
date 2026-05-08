@@ -15,17 +15,18 @@ COMPOSE     := docker compose --project-directory $(COMPOSE_DIR) \
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-lab: lab-up wait-healthy ## Bring the lab up (Postgres + Collector + bridge), wait for healthy.
+lab: lab-up wait-healthy ## Bring the lab up (Postgres + Collector + bridge + Grafana), wait for healthy.
 	@echo
 	@echo "Lab is up:"
 	@echo "  Postgres:  postgresql://<user>:<password>@localhost:5432/agent_spend  (defaults from .env)"
 	@echo "  Collector: OTLP/HTTP at http://localhost:4318"
 	@echo "  Health:    http://localhost:13133"
+	@echo "  Grafana:   http://localhost:3000  (anonymous viewer enabled; admin/admin to log in)"
 	@echo
 	@echo "Run 'make seed' to populate with synthetic data."
 
 lab-up: ## docker compose up -d
-	$(COMPOSE) up -d --build postgres collector bridge
+	$(COMPOSE) up -d --build postgres collector bridge grafana
 
 lab-down: ## docker compose down (keeps volumes)
 	$(COMPOSE) down
