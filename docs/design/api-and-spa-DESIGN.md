@@ -635,7 +635,7 @@ flowchart LR
 
 ### 7.4 Lab-only Collector retention
 
-**Sunset complete (phase 0.3.8, commit [`<TBD>`](../../)).** The Collector + bridge are gone from the production-recipe `compose.yml`. They live in `compose.override.yml` only and are run by `make lab` alongside the API. The production-vs-lab split per `docker compose config`:
+**Sunset complete (phase 0.3.8, commit [`8aba953`](https://github.com/vilosource/agent-spend-dashboard/commit/8aba953)).** The Collector + bridge are gone from the production-recipe `compose.yml`. They live in `compose.override.yml` only and are run by `make lab` alongside the API. The production-vs-lab split per `docker compose config`:
 
 | Service | `compose.yml` (prod) | `compose.override.yml` (lab) |
 |---|---|---|
