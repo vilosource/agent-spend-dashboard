@@ -1,0 +1,32 @@
+{
+   "name": "agent-spend-dashboard-monorepo",
+   "private": true,
+   "type": "module",
+   "description": "Agent Spend dashboard reference server: API + SPA + OTLP ingest. See docs/strategy/scope-and-deployment-STRATEGY.md (in vilosource/pi-extensions) for the three-artifact split this repo participates in.",
+   "license": "MIT",
+   "workspaces": [
+      "packages/*"
+   ],
+   "scripts": {
+      "build": "tsc -b",
+      "check": "npm run lint:ci && npm run typecheck && npm run depgraph && npm run boundary && npm run test",
+      "lint": "biome check --write --error-on-warnings .",
+      "lint:ci": "biome check --error-on-warnings .",
+      "typecheck": "tsc -b --noEmit",
+      "depgraph": "depcruise --config .dependency-cruiser.cjs packages",
+      "boundary": "bash scripts/check-public-boundary.sh",
+      "test": "vitest run",
+      "test:watch": "vitest",
+      "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo .tsbuildinfo"
+   },
+   "devDependencies": {
+      "@biomejs/biome": "2.3.5",
+      "@types/node": "^22.10.5",
+      "dependency-cruiser": "^16.10.0",
+      "typescript": "^5.7.0",
+      "vitest": "^3.0.0"
+   },
+   "engines": {
+      "node": ">=20.0.0"
+   }
+}

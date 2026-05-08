@@ -1,0 +1,27 @@
+{
+	"name": "@vilosource/pi-extensions-template",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Template package for new pi-extensions packages. Copy this directory; do not depend on it.",
+	"license": "MIT",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc -b",
+		"test": "vitest run --dir src"
+	},
+	"devDependencies": {
+		"vitest": "^3.0.0"
+	}
+}
