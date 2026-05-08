@@ -85,3 +85,22 @@ The bridge is ~150 lines of Python with stdlib + `psycopg`. No build step. Easy 
 **Validated:** Lab end-to-end (2026-05-08): synthetic emitter sends 2800 spans → Collector writes JSONL → bridge inserts → 2800 rows in `agent_spend_logs` → all expected aggregations work (per-user cost, per-team rollup, per-model breakdown, subscription-vs-metered separation, materialized view refresh).
 
 **Sunset condition:** Phase 0.3 lands the API service. When the API can ingest OTLP directly (or via a Collector OTLP exporter pointing at it), the bridge service is removed from `compose.override.yml` and the JSONL exporter from `collector/config.yaml`.
+
+---
+
+## 2026-05-08 · D5 · Grafana dashboards land now; SPA later
+
+**Decision:** Add Grafana to the Compose stack as the lab's first visible UI surface, with three pre-built dashboards (Org Overview, By Team, Burn Rate) provisioned via the Grafana files API. The custom SPA originally planned for phase 0.3 still ships later for the things Grafana can't do well (per-user RBAC, finance-grade exports, custom drill-downs) — but the org/team/ops views land in Grafana now.
+
+**Scope:** This repo. Grafana service in `compose.yml` + `compose.override.yml`; provisioned datasource and dashboards in `deploy/docker-compose/grafana/`.
+
+**Rationale:** Per the [dashboard backend strategy](dashboard-backend-STRATEGY.md), the Shape 3 architecture uses Grafana for ops/team views and a custom SPA for per-user/finance/audit views. The two are complementary; nothing about the SPA requires Grafana to ship first or last. But Grafana is **dramatically faster to first-visible-result**: it ships dashboards as JSON, has a Postgres datasource out of the box, and provisioning is a one-file YAML config. The SPA is weeks of TypeScript.
+
+For the explicit goal of "I want to see something on the dashboard," shipping Grafana first is the right answer. It also lets us validate the schema by querying it from a real BI tool, which surfaces ergonomic problems with column names, missing indexes, etc., before the SPA is locked into them.
+
+The dashboards we ship today match the org/team/ops view targeted by the design doc §6 SPA pages. When the SPA lands in phase 0.3, the SPA owns: per-user (each developer sees only their own data), finance exports, audit, and any drill-down that needs a custom URL or data shape Grafana can't render. The Grafana dashboards stay; they don't compete with the SPA, they complement it.
+
+**Validated end-to-end (2026-05-08):** `make lab && make seed` brings up the stack in ~25 s, populates 2800 rows, and Grafana renders all three dashboards correctly:
+- Org Overview: total cost $9.41 across 8 model variants; subscription split visible
+- By Team: $5.52 / $2.84 / $1.05 across 3 teams
+- Burn Rate: long-running session detector flags 5 sessions > 23 h

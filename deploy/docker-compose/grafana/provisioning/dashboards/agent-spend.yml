@@ -1,0 +1,16 @@
+# Provisioner: load every dashboard JSON in /var/lib/grafana/dashboards on startup.
+# We mount the host directory deploy/docker-compose/grafana/dashboards there.
+
+apiVersion: 1
+
+providers:
+  - name: agent-spend
+    orgId: 1
+    folder: 'Agent Spend'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,22 @@
+# Provisioned data source: agent_spend Postgres.
+# Per docs/strategy/local-lab-STRATEGY.md §3.1, Grafana is the ops/exploration
+# surface; Postgres is the source of truth.
+
+apiVersion: 1
+
+datasources:
+  - name: agent_spend
+    uid: agent_spend
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: ${POSTGRES_USER}
+    jsonData:
+      database: ${POSTGRES_DB}
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    isDefault: true
+    editable: true

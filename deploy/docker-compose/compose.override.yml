@@ -59,3 +59,16 @@ services:
       environment:
          OTEL_ENDPOINT: http://collector:4318
       command: ["--endpoint", "http://collector:4318", "--days", "7", "--users", "10"]
+
+   # Grafana — dev creds + exposed port + anonymous viewer access for the lab.
+   grafana:
+      environment:
+         GRAFANA_ADMIN_USER: admin
+         GRAFANA_ADMIN_PASSWORD: admin
+         GRAFANA_ANONYMOUS: "true"
+         GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+         # Don't show the "complete the setup" or sign-up nag in the lab.
+         GF_USERS_ALLOW_SIGN_UP: "false"
+         GF_NEWS_NEWS_FEED_ENABLED: "false"
+      ports:
+         - "3000:3000"
