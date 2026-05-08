@@ -15,20 +15,23 @@ COMPOSE     := docker compose --project-directory $(COMPOSE_DIR) \
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-lab: lab-up wait-healthy ## Bring the lab up (Postgres + Collector + bridge + Grafana + api + Dex), wait for healthy.
+lab: lab-up wait-healthy ## Bring the lab up (Postgres + Grafana + api + Dex; Collector + bridge as regression fixtures), wait for healthy.
 	@echo
 	@echo "Lab is up:"
 	@echo "  Grafana:   http://localhost:7000  (anonymous viewer; admin/admin to log in)"
-	@echo "  API:       http://localhost:7080  (login at /auth/login → Dex)"
+	@echo "  API:       http://localhost:7080  (login at /auth/login → Dex; /v1/traces is the production OTLP path)"
 	@echo
 	@echo "  For Postgres:  make psql  (no host port mapping by design)"
-	@echo "  Collector OTLP/HTTP (transitional, retires at 0.3.8):  http://localhost:7018"
-	@echo "  Dex (lab IdP, transitional):  http://idp.localhost:7019"
+	@echo "  Dex (lab IdP):  http://idp.localhost:7019"
+	@echo
+	@echo "  Regression fixtures (lab-only since phase 0.3.8 / D6 sunset):"
+	@echo "    Collector OTLP/HTTP:  http://localhost:7018"
+	@echo "    bridge:                tails Collector JSONL → Postgres (catches OTel-pipeline regressions only)"
 	@echo
 	@echo "  Lab users:   lab-admin@example.invalid / lab"
 	@echo "               lab-user@example.invalid  / lab"
 	@echo
-	@echo "Run 'make seed' to populate with synthetic data."
+	@echo "Run 'make seed' to populate with synthetic data via the regression-fixture path."
 
 lab-up: ## docker compose up -d
 	$(COMPOSE) up -d --build postgres collector bridge grafana api idp

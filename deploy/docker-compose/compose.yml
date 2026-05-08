@@ -27,21 +27,12 @@ services:
          timeout: 5s
          retries: 10
 
-   collector:
-      image: otel/opentelemetry-collector-contrib:0.117.0
-      restart: unless-stopped
-      command: ["--config=/etc/otel/config.yaml"]
-      volumes:
-         - ./collector/config.yaml:/etc/otel/config.yaml:ro
-         - otel-spans:/var/log/otel
-      depends_on:
-         postgres:
-            condition: service_healthy
-      # The otelcol-contrib image has no curl/wget; in-container HTTP healthchecks
-      # are not feasible. We rely on dependents using `condition: service_started`
-      # and on the collector's own log output to confirm readiness. The Makefile's
-      # wait-healthy target uses Compose status (not a host probe) since the
-      # collector's :13133 health endpoint is not exposed to the host.
+   # NOTE: the OTel Collector + bridge are NOT in this production recipe.
+   # Per D6, the API absorbs OTLP ingest (`/v1/traces`) directly from the
+   # extension. D6's sunset condition was met by phase 0.3.7 (commit
+   # 47bedcf); the Collector + bridge stay in compose.override.yml as
+   # OTel-pipeline regression fixtures for the lab only. Production
+   # deployments run only postgres + api + grafana from this file.
 
    api:
       # Agent Spend API + SPA + OTLP ingest (per docs/design/api-and-spa-DESIGN.md).
@@ -95,5 +86,6 @@ services:
 
 volumes:
    pg-data:
-   otel-spans:
    grafana-data:
+   # otel-spans: declared in compose.override.yml (lab-only; the Collector
+   # writes JSONL here for the bridge to consume in regression tests).

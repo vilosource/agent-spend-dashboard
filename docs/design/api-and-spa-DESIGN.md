@@ -635,7 +635,21 @@ flowchart LR
 
 ### 7.4 Lab-only Collector retention
 
-The Collector + bridge stay in `compose.override.yml` for the lab to exercise the standard OTel pipeline. The production-recipe `compose.yml` removes them. This is per [D6](../strategy/decisions-LOG.md)'s sunset condition for [D4](../strategy/decisions-LOG.md): the bridge is no longer load-bearing on the production path; it remains in the lab for OTel pipeline regression testing.
+**Sunset complete (phase 0.3.8, commit [`<TBD>`](../../)).** The Collector + bridge are gone from the production-recipe `compose.yml`. They live in `compose.override.yml` only and are run by `make lab` alongside the API. The production-vs-lab split per `docker compose config`:
+
+| Service | `compose.yml` (prod) | `compose.override.yml` (lab) |
+|---|---|---|
+| `postgres` | yes | (env overrides) |
+| `api` | yes | (env overrides + extra_hosts) |
+| `grafana` | yes | (env overrides + port) |
+| `collector` | — | yes (regression fixture) |
+| `bridge` | — | yes (regression fixture) |
+| `idp` (Dex) | — | yes (lab IdP) |
+| `seeder` | — | yes (profile-gated) |
+
+The Collector + bridge stay in the lab as regression fixtures for the standard OTel pipeline (filter / redact / batch / file exporter). They catch behaviour drift if a deploying organisation chains the API behind their existing Collector. The seeder still drives traffic through them in `make seed`, so we exercise the full pipeline on every `make reset`.
+
+This realises the sunset condition documented in [D6](../strategy/decisions-LOG.md) (which itself sunset [D4](../strategy/decisions-LOG.md)). The bridge is no longer load-bearing on the production path; it's pure regression infrastructure.
 
 
 ## 8. The install flow
@@ -926,7 +940,8 @@ These are deliberately unresolved in this document. Each gets settled in the rel
 - ⏭ 0.3.4 GitHub adapter — deferred (not on the Optiscan critical path; revisit when an external-contractor scenario actually needs it)
 - ✅ 0.3.6 JWT minting + `api_tokens` table reads — merged to `main` ([`7744cff`](https://github.com/vilosource/agent-spend-dashboard/commit/7744cff)). `requireAuth` middleware accepts both cookie and bearer; the bearer path validates against `api_tokens` with the SHA-256 hash + partial unique index from D14.
 - ✅ 0.3.7 OTLP `/v1/traces` ingest — merged to `main` ([`47bedcf`](https://github.com/vilosource/agent-spend-dashboard/commit/47bedcf)). API absorbs the bridge: `POST /v1/traces` mounted with `requireAuth` (bearer-only, cookies rejected), pure transform mirrors `bridge.py`, batch `INSERT` into `agent_spend_logs`. D6 sunset condition met.
-- 🟡 0.3.8 sunset bridge from prod compose — next (remove Collector + bridge from `compose.yml`; lab `compose.override.yml` keeps them as OTel-pipeline regression fixtures).
-- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.8 → 0.3.9.)
+- ✅ 0.3.8 sunset bridge from prod compose — Collector + bridge removed from `compose.yml`; both retained in `compose.override.yml` as OTel-pipeline regression fixtures (see §7.4). The production recipe is now exactly postgres + api + grafana.
+- 🟡 0.3.9 SPA: Login + `/me` page — next. The "I can see my own data" milestone.
+- (0.3.5 LAB_NO_AUTH escape hatch — side-quest, can land anytime; not blocking 0.3.9.)
 
 Each subsequent phase ships as its own PR.

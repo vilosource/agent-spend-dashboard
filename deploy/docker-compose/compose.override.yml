@@ -37,17 +37,34 @@ services:
          POSTGRES_DB: agent_spend
       # No host port mapping — use `make psql` for ad-hoc queries.
 
+   # OTel Collector — LAB-ONLY since phase 0.3.8 (D6 sunset complete).
+   # The production recipe (compose.yml) runs the API's /v1/traces
+   # endpoint directly. We keep the Collector here as a regression
+   # fixture for the standard OTel pipeline (filter / redact / batch
+   # / file exporter) so we can catch behaviour drift if a deploying
+   # organisation chains the API behind their existing Collector.
+   #
+   # Host port :7018 OTLP/HTTP is preserved for the seeder + any
+   # ad-hoc experiments. After 0.3.7 the host's pi extension targets
+   # :7080/v1/traces (the API), not :7018.
    collector:
+      image: otel/opentelemetry-collector-contrib:0.117.0
+      restart: unless-stopped
+      command: ["--config=/etc/otel/config.yaml"]
+      volumes:
+         - ./collector/config.yaml:/etc/otel/config.yaml:ro
+         - otel-spans:/var/log/otel
+      depends_on:
+         postgres:
+            condition: service_healthy
       ports:
-         - "7018:4318"   # OTLP HTTP — transitional; host pi sends here until
-                          # phase 0.3.8 (bridge sunset). After 0.3.8, host pi
-                          # posts to the API at :7080/v1/traces and this mapping
-                          # is removed.
-      # The collector image runs as a non-root user but the otel-spans volume
-      # is root-owned by Docker on first creation. Run the collector as root
-      # in the lab to keep the file/spans exporter working without volume
-      # permission gymnastics. A production deployment should instead set up
-      # the volume's ownership correctly OR drop the file exporter.
+         - "7018:4318"   # OTLP/HTTP — used by the seeder and by any
+                          # regression test that wants to push through the
+                          # full Collector → bridge → Postgres pipeline.
+      # The collector image runs as a non-root user but the otel-spans
+      # volume is root-owned by Docker on first creation. Run as root in
+      # the lab to keep the file/spans exporter working without volume
+      # permission gymnastics.
       user: "0:0"
 
    # Bridge: tails the Collector's JSONL output and inserts into Postgres.
@@ -139,3 +156,9 @@ services:
          timeout: 3s
          retries: 10
          start_period: 5s
+
+# Lab-only volumes. otel-spans is the JSONL pipe between the Collector's
+# file exporter and the bridge — only used when the regression-test
+# pipeline runs.
+volumes:
+   otel-spans:
