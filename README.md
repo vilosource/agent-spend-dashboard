@@ -8,11 +8,11 @@ This repository is the **reference dashboard server** for the [scope-and-deploym
 
 **Pre-implementation.** This repo currently contains documentation only:
 
-- A local lab strategy (forthcoming)
+- A [local lab strategy](docs/strategy/local-lab-STRATEGY.md) describing the Compose-based development environment, containerized pi target, scenario format, and CI integration
+- A [public/private boundary strategy](docs/strategy/public-boundary-STRATEGY.md) and the same boundary CI as [`vilosource/pi-extensions`](https://github.com/vilosource/pi-extensions)
 - A high-level design that mirrors the [pi-usage-reporter design](https://github.com/vilosource/pi-extensions/blob/main/docs/design/pi-usage-reporter-DESIGN.md) §4-§6 (Collector pipeline, Postgres schema, API + SPA scope)
-- The same public/private boundary discipline as the [`vilosource/pi-extensions`](https://github.com/vilosource/pi-extensions) repo: see [`docs/strategy/public-boundary-STRATEGY.md`](docs/strategy/public-boundary-STRATEGY.md)
 
-Implementation lands as separate PRs on `main` once the lab strategy is agreed.
+Implementation lands as separate PRs on `main` once the lab strategy is reviewed.
 
 ## What this is not
 

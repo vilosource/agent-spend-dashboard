@@ -8,7 +8,7 @@ Forthcoming docs (in implementation order):
 
 | Doc | Subject |
 |---|---|
-| `local-lab-STRATEGY.md` (`docs/strategy/`) | Compose-based local lab + containerized pi target for end-to-end testing |
+| [`local-lab-STRATEGY.md`](../strategy/local-lab-STRATEGY.md) (in `docs/strategy/`) | Compose-based local lab + containerized pi target for end-to-end testing — **landed** |
 | `collector-pipeline-DESIGN.md` | Collector receiver, processors, exporters in detail |
 | `postgres-schema-DESIGN.md` | Full DDL, partitioning, materialised views, retention |
 | `api-DESIGN.md` | Express service, routes, RBAC, SSO |
