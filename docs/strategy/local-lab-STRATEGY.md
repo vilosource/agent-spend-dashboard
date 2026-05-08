@@ -81,7 +81,7 @@ sequenceDiagram
   Lab-->>Make: all healthchecks pass
   Make->>Pi: docker run pi-test-target --scenario basic-turn.yaml
   Pi->>Pi: load extension from mounted dist/
-  Pi->>Pi: send canned prompt to Haiku
+  Pi->>Pi: send canned prompt to z.ai (or GitHub Copilot)
   Pi-->>Ext: message_end with usage
   Ext->>Col: OTLP POST /v1/traces
   Col->>DB: INSERT INTO agent_spend_logs
@@ -211,7 +211,7 @@ flowchart LR
     src["packages/pi-usage-reporter/dist/<br/>(in-development extension)"]
     fixture["lab/pi-test/fixtures/workspace/<br/>(canned 'project' for pi to act on)"]
     config["lab/pi-test/fixtures/pi-config/<br/>(settings.json that loads the extension)"]
-    secrets["~/.config/pi-usage-lab/secrets.env<br/>(Anthropic API key, gitignored)"]
+    secrets["~/.config/pi-usage-lab/secrets.env<br/>(z.ai token / Copilot auth, gitignored)"]
   end
 
   subgraph container["pi-test container"]
@@ -238,22 +238,41 @@ Key choices:
 - **Identity is fake by construction.** `PI_USAGE_USER_ID=lab-test@example.invalid`, `PI_USAGE_MACHINE_ID=00000000-0000-0000-0000-000000000001`, `PI_USAGE_ENVIRONMENT=lab`. The dashboard treats anything tagged `agent.environment=lab` as a separate dataset, filtered out of "real" views by default.
 - **OTLP target is the lab Collector via the Compose network.** When invoked through `make pi-test` the container joins the lab's Compose network and reaches `http://collector:4318`.
 
-### 5.4 LLM provider — real Haiku, not a mock
+### 5.4 LLM providers — z.ai (default) and GitHub Copilot
 
-Per D5 in the [pi-extensions decisions log](https://github.com/vilosource/pi-extensions/blob/main/docs/strategy/decisions-LOG.md) and the conversation that produced this doc: we use **real Haiku** (Anthropic's cheapest model — roughly $0.80 / $4 per million tokens) for lab scenarios, not a mock provider.
+The lab uses the **same providers our developers actually use**, not a generic example provider. Two are supported:
 
-Reasons:
+**Default: z.ai via the Anthropic-compatible endpoint** (matches the vafi pattern at [`vilosource/vafi`](https://github.com/vilosource/vafi)'s `images/developer/vf-harness/init-pi.sh`):
 
-- A typical scenario is a few hundred tokens; cost per scenario is fractions of a cent.
+- Endpoint: `https://api.z.ai/api/anthropic`
+- Auth: `ANTHROPIC_AUTH_TOKEN` (a z.ai API key, used as a bearer token)
+- Default model: `glm-4.6` (or whichever GLM model the team has standardized on; see [z.ai docs](https://docs.z.ai/devpack/tool/others) for the full list — `GLM-5.1`, `GLM-5`, `GLM-5-Turbo`, `GLM-4.7`, `GLM-4.5-air`)
+- Pi `models.json` configures it as the `anthropic` provider with `api: anthropic-messages` and `baseUrl: https://api.z.ai/api/anthropic`
+
+**Optional: GitHub Copilot** (matches the developer's interactive setup):
+
+- Auth: OAuth device-flow (pi handles the flow; no plain API key)
+- Provider: `github-copilot`, default model: `claude-opus-4-7` or whatever your subscription allows
+- For the lab, this requires a one-time `pi auth github-copilot login` performed on the host, with the resulting `~/.pi/agent/auth.json` mounted RO into the pi-test container
+
+Note that the previous version of this document named Anthropic's Haiku as the lab provider — **that was wrong**: we do not have direct Anthropic accounts. Corrected by D3 in the decisions log.
+
+Reasons for using real (not mocked) providers:
+
+- A typical lab scenario is a few hundred tokens. z.ai's GLM Coding Plan is subscription-based with no per-call billing for plan users, so cost per scenario is effectively zero. GitHub Copilot is also subscription-based.
 - Real provider path exercises the real `Usage.cost` calculation in pi-mono, which is exactly what we are validating.
-- Mock providers introduce their own bugs and need their own maintenance.
+- Mock providers introduce their own bugs and need their own maintenance. We have proven providers that are essentially free for our usage volume.
 - Non-determinism in response *content* doesn't matter — scenarios assert on token counts, cost shape, and attribute presence, not on response text.
 
 Operational implications:
 
-- The lab requires an Anthropic API key. Stored locally at `~/.config/pi-usage-lab/secrets.env` (gitignored), env-var injected into the `pi-test` container only. Never seen by the Collector or Postgres.
-- CI requires the same. Stored as a GitHub Actions secret `ANTHROPIC_TEST_API_KEY`, scoped to a key with a low monthly cap (recommend $10 hard limit; Anthropic's console supports per-key caps).
+- The lab requires either a z.ai API token (`ZAI_API_KEY`) or a completed GitHub Copilot OAuth (`~/.pi/agent/auth.json` containing the `github-copilot` entry).
+- Tokens are stored locally at `~/.config/pi-usage-lab/secrets.env` (gitignored), env-var injected into the `pi-test` container only. Never seen by the Collector or Postgres.
+- For GitHub Copilot, the auth file is mounted RO from `~/.pi/agent/auth.json`. The container does not perform the OAuth flow itself — the developer has already done it on the host for their day-to-day pi.
+- CI requires a z.ai token only (Copilot's OAuth flow doesn't fit CI cleanly). Stored as a GitHub Actions secret `ZAI_API_KEY`, scoped to a key the team controls. Subscription-based, so no per-call cost cap to worry about — but the key is rotatable.
 - The lab Collector and Postgres see only the resulting OTLP events (tokens, cost, model name, etc.) — never the API key, never the prompt content.
+
+Provider selection in scenarios is explicit (see §9). Each scenario declares which provider it expects so a missing token surfaces fast.
 
 ### 5.5 Make verbs
 
@@ -287,7 +306,7 @@ A new contributor running `make lab && make seed` should see populated dashboard
 
 ### 6.1 Synthetic OTLP emitter (primary)
 
-`lab/seed/synthetic-emit.ts` is a small Node script that emits realistic spans + metrics directly to the local Collector via OTLP/HTTP. It generates 7 days of traffic for ~10 fake users across ~5 fake teams using ~15 model variants (Opus / Sonnet / Haiku / GPT-5 / Gemini Pro / etc.).
+`lab/seed/synthetic-emit.ts` is a small Node script that emits realistic spans + metrics directly to the local Collector via OTLP/HTTP. It generates 7 days of traffic for ~10 fake users across ~5 fake teams using model variants representative of what our developers actually use — GLM via z.ai (`glm-4.6`, `glm-4.5-air`, `glm-5`), Claude via GitHub Copilot (`claude-opus-4-7`, `claude-sonnet-4`), and a sprinkle of others (`gpt-5`, `gemini-2.5-pro`) so dashboards exercise multi-provider rendering.
 
 Why synthetic-through-Collector and not SQL fixtures:
 
@@ -337,8 +356,9 @@ The lab is subject to the same [public-boundary](public-boundary-STRATEGY.md) ru
 - Lab credentials are conventional placeholders, not secrets. `dev/dev`, `admin/admin`, `lab-secret`, `00000000-0000-0000-0000-000000000001`. None are real anywhere.
 - All identities use IETF-reserved domains: `.example.invalid`, `.example.com`, `.test`. `lab-test@example.invalid`, `seed-user-N@example.invalid`, `lab-admin@example.invalid`.
 - All hostnames in lab config are `localhost` or Compose service names (`collector`, `postgres`, `idp`). No real FQDNs.
-- The `~/.config/pi-usage-lab/secrets.env` file containing the Anthropic API key is **gitignored at the repo root**. The `.gitignore` is updated to include it explicitly.
-- The CI Anthropic key is a GitHub Actions secret with a low monthly spending cap.
+- The `~/.config/pi-usage-lab/secrets.env` file containing the z.ai token (and any other provider tokens) is **gitignored at the repo root**. The `.gitignore` is updated to include it explicitly.
+- The CI z.ai key is a GitHub Actions secret `ZAI_API_KEY`. Subscription-based, so no spending-cap concern; rotatable via the z.ai console.
+- For GitHub Copilot, the developer's `~/.pi/agent/auth.json` is mounted RO into the pi-test container; it is never copied into the repo or into CI.
 
 The boundary check (`scripts/check-public-boundary.sh`) runs against the lab files just like any other source. Lab files use placeholders by construction.
 
@@ -348,22 +368,22 @@ The boundary check (`scripts/check-public-boundary.sh`) runs against the lab fil
 Scenarios are YAML files in `lab/scenarios/`, run by `make pi-test-scenario S=<name>`. Each scenario specifies:
 
 - **identity** to inject into the pi-test container
-- **provider config** (Haiku endpoint + key from secrets.env)
+- **provider config** (z.ai endpoint+token from secrets.env, or GitHub Copilot via mounted auth.json)
 - **prompts** to send to pi
 - **expected** Postgres rows after the run
 
-Example `lab/scenarios/basic-turn.yaml`:
+Example `lab/scenarios/basic-turn-zai.yaml`:
 
 ```yaml
-name: basic-turn
-description: One user message, one assistant response, verify spend log row.
+name: basic-turn-zai
+description: One user message, one assistant response via z.ai (GLM), verify spend log row.
 identity:
   user_id: lab-test@example.invalid
   machine_id: 00000000-0000-0000-0000-000000000001
   environment: lab
 provider:
-  type: anthropic
-  model: claude-3-5-haiku-latest
+  type: zai            # selects z.ai via the Anthropic-compatible endpoint
+  model: glm-4.6       # any GLM model the team has access to
 prompts:
   - "Reply with exactly the word 'ok'."
 expect:
@@ -381,8 +401,12 @@ expect:
     - agent.harness.version
   attributes_constraints:
     agent.harness.name: pi
-    gen_ai.provider.name: anthropic
+    gen_ai.provider.name: anthropic     # z.ai uses the anthropic-compat endpoint;
+                                        # gen_ai.provider.name reflects the wire protocol
+    gen_ai.request.model: glm-4.6
 ```
+
+A companion `basic-turn-copilot.yaml` declares `provider.type: github-copilot` and a Copilot-allowed model. The runner picks the right env-var injection or auth-file mount based on `provider.type`.
 
 The scenario runner (`lab/scenarios/run.ts`) is ~150 LOC: read YAML, set env vars, spawn pi-test, wait for exit, run psql query, assert. Failures print which expectation failed and what was found instead.
 
@@ -406,7 +430,9 @@ flowchart LR
 
 Estimated runtime: 90 seconds startup + 15 seconds per scenario + 10 seconds teardown. With ~5 initial scenarios, total ~3 minutes per PR. Not free but not painful.
 
-Anthropic API key is the GitHub Actions secret `ANTHROPIC_TEST_API_KEY`, scoped per environment (separate keys for `pull_request` vs `push: main`), each with a low monthly cap.
+Anthropic-compatible auth via z.ai is the GitHub Actions secret `ZAI_API_KEY`, used by the `pi-test` container's env (`ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY`, `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`). z.ai's GLM Coding Plan is subscription-based, so there is no per-call billing exposure to manage with Anthropic-style spending caps. Rotate the key when needed; revoke from the z.ai console.
+
+GitHub Copilot scenarios are skipped in CI because the OAuth device flow doesn't fit unattended runs cleanly. They run locally only, when the developer has performed `pi auth github-copilot login` on the host.
 
 ## 11. What this lab is not
 
@@ -432,7 +458,7 @@ gantt
    0.2 Synthetic emitter (seed)                :p02, after p01, 2d
    0.3 Grafana + Prometheus + provisioned dashboards :p03, after p01, 4d
    section pi-test target
-   0.4 pi-test image + Haiku integration       :p04, after p02, 3d
+   0.4 pi-test image + z.ai integration       :p04, after p02, 3d
    0.5 Scenario format + runner                :p05, after p04, 3d
    0.6 e2e CI workflow                         :p06, after p05, 2d
    section UI integration
@@ -448,7 +474,7 @@ Phases 0.1-0.3 unblock dashboard server development (server can be coded against
 1. **The lab lives in this repo at `deploy/docker-compose/` and `lab/`.** It is not a separate repo. The `compose.yml` doubles as the smallest viable production recipe; `compose.override.yml` adds the lab-only ergonomics.
 2. **Compose with profiles, Makefile wrapper.** No `just`, no `task`, no Nx — keep tools to what is on every developer machine.
 3. **One containerized pi target image** (`lab/pi-test/`), purpose-built for our test scenarios, **not** a base of vafi's image. Vafi as reference only.
-4. **Real Haiku for scenarios**, not a mock provider. Anthropic API key from `~/.config/pi-usage-lab/secrets.env` locally and `ANTHROPIC_TEST_API_KEY` in CI, both with low spending caps.
+4. **Real LLM providers, not mocks.** Default is **z.ai** via the Anthropic-compatible endpoint (`https://api.z.ai/api/anthropic` with `ANTHROPIC_AUTH_TOKEN`); model is a GLM variant. Optional **GitHub Copilot** via the developer's existing OAuth (`~/.pi/agent/auth.json` mounted RO). z.ai's GLM Coding Plan is subscription-based so per-call cost is not a concern; Copilot likewise. CI uses z.ai only.
 5. **Dex** as the mock OIDC IdP. Production deployments substitute Entra/Google/Okta/Auth0/Keycloak via env vars.
 6. **Synthetic OTLP emitter** as the primary seed path; optional real-pi tee as a documented secondary path.
 7. **Scenarios are YAML in `lab/scenarios/`** with a small TypeScript runner. Postgres assertions only (not Prometheus / Grafana — those are downstream of Postgres anyway).
