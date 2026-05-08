@@ -1,0 +1,25 @@
+# Public / private boundary check.
+# See docs/strategy/public-boundary-STRATEGY.md.
+#
+# This workflow is intentionally minimal and fast: a single regex scan
+# of the repository, no Node setup, no caching. Runs on every push and
+# every pull request. Fails the workflow if any forbidden pattern is
+# found in a non-allowlisted file.
+
+name: Boundary check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  boundary:
+    name: Public / private boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Run boundary check
+        run: bash scripts/check-public-boundary.sh

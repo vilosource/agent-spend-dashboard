@@ -1,0 +1,14 @@
+# .boundary-allowlist
+#
+# Files in this list are exempt from scripts/check-public-boundary.sh.
+# Each entry MUST include a one-line comment explaining why the file
+# legitimately needs to contain something that matches a denylist pattern.
+#
+# Format: one path per line, glob patterns allowed.
+# Empty lines and lines starting with # are ignored.
+#
+# See docs/strategy/public-boundary-STRATEGY.md for the rules.
+
+# The CI script itself contains the denylist regexes, which include the
+# patterns we are forbidding elsewhere.
+scripts/check-public-boundary.sh
