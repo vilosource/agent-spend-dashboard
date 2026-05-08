@@ -2,12 +2,10 @@
  * Express app factory.
  *
  * Per the design (§2.1), three URL spaces share one port:
- *   /              → SPA static bundle (placeholder for now)
+ *   /              → SPA static bundle (Svelte 5; built into ../spa/)
  *   /health        → liveness probe
- *   /api/me        → authenticated identity probe (phase 0.3.3 minimal form)
- *   /auth/login    → start OIDC flow
- *   /auth/callback → finish OIDC flow, mint session cookie
- *   /auth/logout   → clear session cookie
+ *   /api/me*       → authenticated identity + own-data endpoints
+ *   /auth/*        → OIDC login/callback/logout
  *   /v1/traces     → OTLP ingest (bearer-only, phase 0.3.7)
  *
  * The factory pattern keeps IO (`listen`, db connections, OIDC
@@ -15,11 +13,13 @@
  * fake `Db` and a real-Dex `OidcContext` independently.
  */
 
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Express, type Request, type Response } from "express";
 import { VERSION } from "../shared/version.js";
 import type { OidcContext } from "./auth/oidc.js";
 import { authRoutes } from "./auth/routes.js";
-import { readSession } from "./auth/session.js";
 import type { Db } from "./db.js";
 import { ingestRoutes } from "./ingest/routes.js";
 import { meRoutes } from "./me/routes.js";
@@ -30,6 +30,8 @@ export interface AppDeps {
 	readonly oidc: OidcContext;
 	readonly db: Db;
 }
+
+const SPA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../spa");
 
 export function createApp(deps: AppDeps): Express {
 	const app = express();
@@ -43,52 +45,37 @@ export function createApp(deps: AppDeps): Express {
 	app.use(ingestRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
 	app.use("/api", meRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
 
-	app.get("/", async (req: Request, res: Response) => {
-		const session = await readSession(req, deps.jwtSecret);
-		res.set("Content-Type", "text/html; charset=utf-8");
-		res.send(renderPlaceholder(deps.publicUrl, session));
-	});
+	if (existsSync(SPA_DIR)) {
+		// SPA bundle is present — serve it. Static assets first; any
+		// other GET falls through to index.html so client-side
+		// navigation to /me works on direct URL load.
+		app.use(express.static(SPA_DIR, { index: false }));
+		app.get(/^\/(?!api\/|auth\/|v1\/|health$|static\/).*/, (_req, res) => {
+			res.sendFile(resolve(SPA_DIR, "index.html"));
+		});
+	} else {
+		// SPA hasn't been built — surface a clear instruction instead of
+		// a 404. This is the dev path before someone runs `npm run build`
+		// in packages/spa, and the test path where createApp() is invoked
+		// without a built bundle.
+		app.get("/", (_req, res) => {
+			res.set("Content-Type", "text/html; charset=utf-8");
+			res.status(503).send(renderSpaMissing(deps.publicUrl));
+		});
+	}
 
 	return app;
 }
 
-function renderPlaceholder(publicUrl: string, session: { email: string; role: string } | null): string {
-	const authBlock = session
-		? `<p>Logged in as <code>${htmlEscape(session.email)}</code> (role: <code>${htmlEscape(session.role)}</code>).
-		   <form method="POST" action="/auth/logout" style="display:inline">
-		      <button type="submit">Log out</button>
-		   </form></p>`
-		: `<p><a href="/auth/login">Log in</a> via the configured OIDC provider.</p>`;
-
+function renderSpaMissing(publicUrl: string): string {
 	return `<!doctype html>
-<html lang="en">
-<head>
-   <meta charset="utf-8">
-   <title>Agent Spend</title>
-   <meta name="viewport" content="width=device-width,initial-scale=1">
-   <style>
-      body { font-family: system-ui, sans-serif; max-width: 38em; margin: 4em auto; padding: 0 1em; color: #222; }
-      code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
-      .meta { color: #666; font-size: 0.9em; margin-top: 2em; }
-   </style>
-</head>
-<body>
-   <h1>Agent Spend</h1>
-   <p>The reference dashboard server is running. Version <code>${VERSION}</code>.</p>
-   ${authBlock}
-   <p>The SPA is not yet present in this build — it lands in phase 0.3.9.
-      For now you can:</p>
-   <ul>
-      <li>Check liveness at <a href="/health"><code>/health</code></a></li>
-      <li>Hit <a href="/api/me"><code>/api/me</code></a> to see the authenticated identity (or 401).</li>
-      <li>Browse the <a href="https://github.com/vilosource/agent-spend-dashboard">project on GitHub</a></li>
-   </ul>
-   <p class="meta">This page served from <code>${htmlEscape(publicUrl)}</code>.</p>
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent Spend</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 38em; margin: 4em auto; padding: 0 1em;">
+<h1>Agent Spend</h1>
+<p>The API is running but the SPA bundle isn't built yet.</p>
+<p>From the repo root: <code>npm run -w @vilosource/agent-spend-spa build</code></p>
+<p>Public URL: <code>${publicUrl}</code></p>
+<p>API surface: <a href="/health"><code>/health</code></a> · <a href="/api/me"><code>/api/me</code></a></p>
+</body></html>
 `;
-}
-
-function htmlEscape(s: string): string {
-	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }

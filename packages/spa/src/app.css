@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* uPlot's default stylesheet — included so the chart's tooltip /
+   axis / cursor styles render correctly. */
+@import "uplot/dist/uPlot.min.css";

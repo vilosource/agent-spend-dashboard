@@ -1,0 +1,21 @@
+# Keep the build context small. The Dockerfile installs deps + builds
+# from the source it copies; local node_modules / dist trees are
+# rebuilt inside the image.
+
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Lab containers don't need the lab Compose files (they're for the
+# host) or the docs.
+deploy
+docs
+lab/.gitkeep
+
+# Local cruft.
+.git
+.github
+.playwright-mcp
+*.log
+.env
+.env.local
