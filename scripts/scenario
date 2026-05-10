@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+#
+# scripts/scenario — operator harness for lab/scenario/* end-to-end tests.
+#
+# Inspired by mykb's scripts/spike/kb-spike, scaled down for agent-spend's
+# narrower contract (single image, single network, single sink). The
+# scenarios under lab/scenario/scenarios/*.sh own their own
+# prepare/stimulate/observe phases and use the helpers this script
+# sources into them.
+#
+# Verbs:
+#   scenario build               build the lab/scenario image
+#   scenario list                list available scenarios
+#   scenario run <name>          run one scenario by basename (with or without .sh)
+#   scenario mint <email>        mint a fresh per-machine bearer token for <email>
+#                                via /api/me/tokens (uses lab Dex bypass:
+#                                forges a session JWT signed with the lab
+#                                JWT secret, then POSTs as that user)
+#
+# Environment knobs:
+#   REPORTER_DIST   path to pi-usage-reporter dist (default: ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist)
+#   ZAI_API_KEY     z.ai key for the LLM call (default: read from ${HOME}/.pi/agent/auth.json)
+#   LAB_API         lab API URL on host       (default: http://localhost:7080)
+#   LAB_NETWORK     compose network name      (default: agent-spend_default)
+#   LAB_JWT_SECRET  HS256 signer for forged session JWTs (default: lab-jwt-secret-not-for-production)
+#
+set -euo pipefail
+
+# ── locations ───────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCENARIO_DIR="${REPO_ROOT}/lab/scenario"
+SCENARIOS_DIR="${SCENARIO_DIR}/scenarios"
+RUNS_DIR="${SCENARIO_DIR}/runs"
+
+# ── env defaults ────────────────────────────────────────────────────────
+REPORTER_DIST="${REPORTER_DIST:-${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist}"
+LAB_API="${LAB_API:-http://localhost:7080}"
+LAB_NETWORK="${LAB_NETWORK:-agent-spend_default}"
+LAB_JWT_SECRET="${LAB_JWT_SECRET:-lab-jwt-secret-not-for-production}"
+PG_CONTAINER="${PG_CONTAINER:-agent-spend-postgres-1}"
+SCENARIO_IMAGE="${SCENARIO_IMAGE:-agent-spend-scenario:latest}"
+
+# ZAI key: prefer env, else extract from ~/.pi/agent/auth.json (operator's
+# real config). The container needs it to make the actual LLM call.
+_resolve_zai_key() {
+  if [[ -n "${ZAI_API_KEY:-}" ]]; then
+    printf '%s' "$ZAI_API_KEY"
+    return 0
+  fi
+  local auth="${HOME}/.pi/agent/auth.json"
+  if [[ -f "$auth" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r '.zai.key // empty' < "$auth"
+    return 0
+  fi
+  printf ''
+}
+
+_die() { echo "scenario: $*" >&2; exit 1; }
+
+# ── verb: build ─────────────────────────────────────────────────────────
+cmd_build() {
+  docker build -t "$SCENARIO_IMAGE" "$SCENARIO_DIR"
+}
+
+# ── verb: list ──────────────────────────────────────────────────────────
+cmd_list() {
+  if [[ ! -d "$SCENARIOS_DIR" ]]; then
+    _die "no scenarios dir: $SCENARIOS_DIR"
+  fi
+  for f in "$SCENARIOS_DIR"/*.sh; do
+    [[ -f "$f" ]] || continue
+    local name
+    name="$(basename "$f" .sh)"
+    local intent_line
+    intent_line="$(grep -m1 -E '^\s*intent\s+' "$f" 2>/dev/null \
+                    | sed -E 's/^\s*intent\s+(.*)$/\1/' \
+                    | sed -E 's/^"(.*)"$/\1/')"
+    printf '%-40s  %s\n' "$name" "${intent_line:-—}"
+  done
+}
+
+# ── verb: mint ──────────────────────────────────────────────────────────
+# Forge a session JWT for <email> with the lab secret, then POST a fresh
+# /api/me/tokens. Bypasses Dex entirely. The user must already exist in
+# the users table — log in via the SPA at least once first.
+cmd_mint() {
+  local email="${1:?usage: scenario mint <email>}"
+  local label="${2:-scenario-$(date -u +%Y%m%d-%H%M%S)}"
+  local role="developer"
+  if [[ "$email" == *admin* ]]; then role="admin"; fi
+
+  local session_jwt
+  session_jwt="$(_forge_session_jwt "$email" "$role")"
+
+  local body
+  body="$(curl -sS -b "agent_spend_session=$session_jwt" \
+                -X POST "$LAB_API/api/me/tokens" \
+                -H 'content-type: application/json' \
+                -d "{\"label\":\"$label\"}")"
+
+  if ! echo "$body" | grep -q '"token"'; then
+    echo "$body" >&2
+    _die "mint failed for $email"
+  fi
+  echo "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])'
+}
+
+_forge_session_jwt() {
+  local email="$1" role="$2"
+  node --input-type=module -e "
+import { SignJWT } from 'jose';
+const jwt = await new SignJWT({ email: '$email', name: '$email'.split('@')[0], role: '$role' })
+  .setProtectedHeader({ alg: 'HS256' })
+  .setSubject('$email')
+  .setIssuedAt()
+  .setExpirationTime('5m')
+  .sign(new TextEncoder().encode('$LAB_JWT_SECRET'));
+process.stdout.write(jwt);
+" 2>/dev/null || _die "failed to forge session JWT (is jose available via npm root -g?)"
+}
+
+# ── verb: run ───────────────────────────────────────────────────────────
+cmd_run() {
+  local name="${1:?usage: scenario run <name>}"
+  name="${name%.sh}"
+  local file="$SCENARIOS_DIR/${name}.sh"
+  [[ -f "$file" ]] || _die "no scenario: $file"
+
+  # Hard preconditions before we shell into the scenario.
+  docker image inspect "$SCENARIO_IMAGE" >/dev/null 2>&1 \
+    || _die "image $SCENARIO_IMAGE missing — run 'scripts/scenario build'"
+  [[ -d "$REPORTER_DIST/extension" ]] \
+    || _die "reporter dist missing at $REPORTER_DIST/extension (set REPORTER_DIST)"
+  docker network inspect "$LAB_NETWORK" >/dev/null 2>&1 \
+    || _die "network $LAB_NETWORK missing — run 'make lab' first"
+
+  local zai_key
+  zai_key="$(_resolve_zai_key)"
+  [[ -n "$zai_key" ]] || _die "ZAI_API_KEY not set and ${HOME}/.pi/agent/auth.json has no .zai.key"
+
+  # Per-run dir for transcripts / assertions / step output.
+  local run_id="${name}-$(date -u +%Y%m%d-%H%M%S)"
+  local run_dir="$RUNS_DIR/$run_id"
+  mkdir -p "$run_dir"
+
+  # Context the helpers + scenarios consume.
+  export SCENARIO_NAME="$name"
+  export SCENARIO_RUN_ID="$run_id"
+  export SCENARIO_RUN_DIR="$run_dir"
+  export SCENARIO_IMAGE
+  export REPORTER_DIST LAB_API LAB_NETWORK LAB_JWT_SECRET PG_CONTAINER
+  export ZAI_API_KEY="$zai_key"
+
+  # Default no-ops so a scenario can omit any phase.
+  intent()    { printf 'intent: %s\n' "$*" | tee -a "$run_dir/log"; }
+  prepare()   { :; }
+  stimulate() { :; }
+  observe()   { :; }
+
+  # Source helpers.
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/lib/scenario-helpers.sh"
+
+  # shellcheck source=/dev/null
+  source "$file"
+
+  local prep_rc=0 stim_rc=0 obs_rc=0
+  echo "── prepare ──"   | tee -a "$run_dir/log"; prepare    || prep_rc=$?
+  echo "── stimulate ──" | tee -a "$run_dir/log"; stimulate  || stim_rc=$?
+  echo "── observe ──"   | tee -a "$run_dir/log"; observe    || obs_rc=$?
+
+  local pass=0
+  if (( prep_rc == 0 && stim_rc == 0 && obs_rc == 0 && SCENARIO_FAIL_COUNT == 0 )); then
+    pass=1
+  fi
+
+  {
+    printf 'scenario: %s\nrun_id: %s\nprepare_rc: %d\nstimulate_rc: %d\nobserve_rc: %d\n' \
+      "$name" "$run_id" "$prep_rc" "$stim_rc" "$obs_rc"
+    printf 'asserts_passed: %d\nasserts_failed: %d\n' "${SCENARIO_PASS_COUNT:-0}" "${SCENARIO_FAIL_COUNT:-0}"
+    printf 'verdict: %s\n' "$([[ $pass == 1 ]] && echo PASS || echo FAIL)"
+  } | tee "$run_dir/result.txt"
+
+  (( pass == 1 )) || exit 1
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────
+case "${1:-}" in
+  build)  shift; cmd_build "$@" ;;
+  list)   shift; cmd_list  "$@" ;;
+  mint)   shift; cmd_mint  "$@" ;;
+  run)    shift; cmd_run   "$@" ;;
+  ""|-h|--help|help)
+    cat <<USAGE
+scripts/scenario — agent-spend lab scenario harness
+
+Usage:
+  scenario build              build agent-spend-scenario:latest
+  scenario list               list scenarios under lab/scenario/scenarios/
+  scenario run <name>         run one scenario; prints PASS/FAIL
+  scenario mint <email>       mint a per-machine bearer token for <email>
+
+Env knobs (with defaults):
+  REPORTER_DIST   ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist
+  LAB_API         http://localhost:7080
+  LAB_NETWORK     agent-spend_default
+  LAB_JWT_SECRET  lab-jwt-secret-not-for-production
+USAGE
+    ;;
+  *) _die "unknown verb: $1 (try: scenario help)" ;;
+esac

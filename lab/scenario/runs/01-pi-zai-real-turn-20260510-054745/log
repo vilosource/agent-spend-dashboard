@@ -1,0 +1,15 @@
+intent: real pi+zai turn lands a real row in agent_spend_logs
+── prepare ──
+[05:47:45] minted bearer for lab-admin@example.invalid (label=01-pi-zai-real-turn-054745, jwt=311b)
+[05:47:46] pre-count for lab-admin@example.invalid: 1
+── stimulate ──
+[05:47:46] pi -p (provider=zai, model=glm-4.6): Reply with exactly the word 'ready' (no other text).
+[05:47:54] pi exit=0; reporter flushed (session_shutdown)
+── observe ──
+[05:47:54] PASS: 1 new rows for lab-admin@example.invalid (>= 1 expected)
+[05:47:54] PASS: latest.provider = 'zai'
+[05:47:54] PASS: latest.model = 'glm-4.6'
+[05:47:54] PASS: latest.harness_name = 'pi'
+[05:47:54] PASS: latest.session_id is populated ('1d8f300f-45f6-403d-ad1d-cc84ec369779')
+[05:47:54] PASS: latest.input_tokens is populated ('1111')
+[05:47:54] PASS: latest.output_tokens is populated ('67')

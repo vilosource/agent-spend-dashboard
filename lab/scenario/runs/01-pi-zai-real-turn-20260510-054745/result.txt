@@ -1,0 +1,8 @@
+scenario: 01-pi-zai-real-turn
+run_id: 01-pi-zai-real-turn-20260510-054745
+prepare_rc: 0
+stimulate_rc: 0
+observe_rc: 0
+asserts_passed: 7
+asserts_failed: 0
+verdict: PASS
