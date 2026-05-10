@@ -8,7 +8,16 @@
  *
  * Generic 12-factor names (`PORT`, `PUBLIC_URL`, `DATABASE_URL`) keep
  * their conventional form.
+ *
+ * **Docker-secrets pattern.** Every `required` value also accepts a
+ * `<NAME>_FILE` variant whose value is a filesystem path; the file's
+ * trimmed contents become the value. This is the standard convention
+ * for sourcing secrets from Docker Swarm secrets, Kubernetes secret
+ * mounts, etc., without having to template the value into a plaintext
+ * env var. If both `<NAME>` and `<NAME>_FILE` are set, `_FILE` wins.
  */
+
+import { readFileSync } from "node:fs";
 
 export interface OidcConfig {
 	readonly issuerUrl: string;
@@ -38,9 +47,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
+	// Docker-secrets convention: <NAME>_FILE wins over <NAME>.
+	const filePath = env[`${name}_FILE`]?.trim();
+	if (filePath) {
+		try {
+			const fromFile = readFileSync(filePath, "utf8").trim();
+			if (!fromFile) {
+				throw new Error(`File is empty: ${filePath}`);
+			}
+			return fromFile;
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to read ${name}_FILE=${filePath}: ${reason}`);
+		}
+	}
 	const value = env[name]?.trim();
 	if (!value) {
-		throw new Error(`Missing required environment variable: ${name}`);
+		throw new Error(`Missing required environment variable: ${name} (or ${name}_FILE)`);
 	}
 	return value;
 }
