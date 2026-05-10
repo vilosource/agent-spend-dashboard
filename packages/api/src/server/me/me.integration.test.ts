@@ -231,6 +231,132 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 	});
 });
 
+describe("/api/me/tokens — phase 0.3.10", () => {
+	it("GET returns the seeded bearer token row for alice", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/tokens`, { headers: { cookie: env.aliceCookie } });
+		expect(r.status).toBe(200);
+		const body = (await r.json()) as { items: { label: string; id: number }[] };
+		expect(body.items.some((t) => t.label === "test-machine")).toBe(true);
+	});
+
+	it("GET requires auth", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/tokens`);
+		expect(r.status).toBe(401);
+	});
+
+	it("GET scopes to the caller — bob does not see alice's tokens", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/tokens`, { headers: { cookie: env.bobCookie } });
+		const body = (await r.json()) as { items: { label: string }[] };
+		expect(body.items.find((t) => t.label === "test-machine")).toBeUndefined();
+	});
+
+	it("POST mints a working bearer token", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/tokens`, {
+			method: "POST",
+			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
+			body: JSON.stringify({ label: "spec-laptop" }),
+		});
+		expect(r.status).toBe(201);
+		const body = (await r.json()) as { id: number; label: string; token: string; expiresAt: string };
+		expect(body.label).toBe("spec-laptop");
+		expect(typeof body.token).toBe("string");
+		expect(body.token.split(".").length).toBe(3); // jwt shape
+		// Round-trip: the minted token authenticates.
+		const me = await fetch(`${env.baseUrl}/api/me`, {
+			headers: { authorization: `Bearer ${body.token}` },
+		});
+		expect(me.status).toBe(200);
+		expect(await me.json()).toMatchObject({ email: ALICE, source: "bearer", tokenLabel: "spec-laptop" });
+	});
+
+	it("POST rejects invalid label", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/tokens`, {
+			method: "POST",
+			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
+			body: JSON.stringify({ label: "spaces not allowed" }),
+		});
+		expect(r.status).toBe(400);
+	});
+
+	it("POST returns 409 on duplicate active label", async () => {
+		if (!env) throw new Error("env failed");
+		// Mint once.
+		const first = await fetch(`${env.baseUrl}/api/me/tokens`, {
+			method: "POST",
+			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
+			body: JSON.stringify({ label: "duplicate-label-test" }),
+		});
+		expect(first.status).toBe(201);
+		// Second mint with same label — partial unique index fires.
+		const second = await fetch(`${env.baseUrl}/api/me/tokens`, {
+			method: "POST",
+			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
+			body: JSON.stringify({ label: "duplicate-label-test" }),
+		});
+		expect(second.status).toBe(409);
+	});
+
+	it("DELETE revokes the caller's own token; the token stops authenticating", async () => {
+		if (!env) throw new Error("env failed");
+		const minted = await fetch(`${env.baseUrl}/api/me/tokens`, {
+			method: "POST",
+			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
+			body: JSON.stringify({ label: "to-be-revoked" }),
+		});
+		const { id, token } = (await minted.json()) as { id: number; token: string };
+
+		// Token works pre-revoke.
+		const before = await fetch(`${env.baseUrl}/api/me`, { headers: { authorization: `Bearer ${token}` } });
+		expect(before.status).toBe(200);
+
+		const del = await fetch(`${env.baseUrl}/api/me/tokens/${id}`, {
+			method: "DELETE",
+			headers: { cookie: env.aliceCookie },
+		});
+		expect(del.status).toBe(204);
+
+		// Token rejects post-revoke (revoked_at IS NULL clause filters).
+		const after = await fetch(`${env.baseUrl}/api/me`, { headers: { authorization: `Bearer ${token}` } });
+		expect(after.status).toBe(401);
+	});
+
+	it("DELETE 404s on someone else's token id", async () => {
+		if (!env) throw new Error("env failed");
+		// Mint as alice, attempt to revoke as bob.
+		const minted = await fetch(`${env.baseUrl}/api/me/tokens`, {
+			method: "POST",
+			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
+			body: JSON.stringify({ label: "alice-only-token" }),
+		});
+		const { id } = (await minted.json()) as { id: number };
+
+		const del = await fetch(`${env.baseUrl}/api/me/tokens/${id}`, {
+			method: "DELETE",
+			headers: { cookie: env.bobCookie },
+		});
+		expect(del.status).toBe(404);
+
+		// Confirm it's still active for alice.
+		const list = await fetch(`${env.baseUrl}/api/me/tokens`, { headers: { cookie: env.aliceCookie } });
+		const body = (await list.json()) as { items: { label: string }[] };
+		expect(body.items.find((t) => t.label === "alice-only-token")).toBeDefined();
+	});
+
+	it("DELETE 400s on a non-numeric id", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/tokens/abc`, {
+			method: "DELETE",
+			headers: { cookie: env.aliceCookie },
+		});
+		expect(r.status).toBe(400);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // env setup + seed helpers
 // ---------------------------------------------------------------------------

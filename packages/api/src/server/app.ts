@@ -23,6 +23,7 @@ import { authRoutes } from "./auth/routes.js";
 import type { Db } from "./db.js";
 import { ingestRoutes } from "./ingest/routes.js";
 import { meRoutes } from "./me/routes.js";
+import { tokensRoutes } from "./me/tokens.js";
 
 export interface AppDeps {
 	readonly publicUrl: string;
@@ -44,6 +45,7 @@ export function createApp(deps: AppDeps): Express {
 	app.use("/auth", authRoutes(deps));
 	app.use(ingestRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
 	app.use("/api", meRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
+	app.use("/api", tokensRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
 
 	if (existsSync(SPA_DIR)) {
 		// SPA bundle is present — serve it. Static assets first; any

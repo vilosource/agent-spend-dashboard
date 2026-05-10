@@ -39,6 +39,18 @@ export interface InsertApiTokenInput {
 	readonly expiresAt: Date;
 }
 
+/**
+ * Listing projection for /api/me/tokens. The token itself is never
+ * returned after issuance — only metadata for revocation UX.
+ */
+export interface TokenListRow {
+	readonly id: number;
+	readonly label: string;
+	readonly createdAt: Date;
+	readonly expiresAt: Date;
+	readonly lastUsedAt: Date | null;
+}
+
 export interface Db {
 	countUsers(): Promise<number>;
 	findUserByEmail(email: string): Promise<UserRow | null>;
@@ -54,6 +66,14 @@ export interface Db {
 	insertApiToken(input: InsertApiTokenInput): Promise<{ id: number }>;
 	/** Soft-revoke. Used by tests today; by the SPA Settings → Tokens page in 0.3.10. */
 	revokeApiToken(tokenId: number): Promise<void>;
+	/**
+	 * Soft-revoke restricted to a user's own row — returns true if a row
+	 * was updated, false if the (id, user_id) pair didn't match an active
+	 * row. Lets `/api/me/tokens/:id` enforce ownership in one query.
+	 */
+	revokeApiTokenForUser(tokenId: number, userId: number): Promise<boolean>;
+	/** List a user's non-revoked, non-expired tokens, newest first. */
+	listUserTokens(userId: number): Promise<TokenListRow[]>;
 	/** Find a user's numeric id by email. Used by 0.3.10's token issuance. */
 	findUserIdByEmail(email: string): Promise<number | null>;
 	/** Batch INSERT into agent_spend_logs. No-op for an empty array. */
@@ -271,6 +291,44 @@ export function createDb(databaseUrl: string): Db {
 
 		async revokeApiToken(tokenId: number) {
 			await pool.query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [tokenId]);
+		},
+
+		async revokeApiTokenForUser(tokenId: number, userId: number) {
+			const { rowCount } = await pool.query(
+				`UPDATE api_tokens SET revoked_at = now()
+				  WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+				[tokenId, userId],
+			);
+			return (rowCount ?? 0) > 0;
+		},
+
+		async listUserTokens(userId: number) {
+			const { rows } = await pool.query<{
+				id: string;
+				label: string;
+				created_at: Date;
+				expires_at: Date;
+				last_used_at: Date | null;
+			}>(
+				`SELECT id::text       AS id,
+				        label,
+				        created_at,
+				        expires_at,
+				        last_used_at
+				   FROM api_tokens
+				  WHERE user_id = $1
+				    AND revoked_at IS NULL
+				    AND expires_at > now()
+				  ORDER BY created_at DESC, id DESC`,
+				[userId],
+			);
+			return rows.map((r) => ({
+				id: Number.parseInt(r.id, 10),
+				label: r.label,
+				createdAt: r.created_at,
+				expiresAt: r.expires_at,
+				lastUsedAt: r.last_used_at,
+			}));
 		},
 
 		async fetchUsageTotals(where, params) {
