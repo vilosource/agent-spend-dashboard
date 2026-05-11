@@ -32,6 +32,7 @@ import {
 	type AccountInfo,
 	BrowserCacheLocation,
 	InteractionRequiredAuthError,
+	ProtocolMode,
 	PublicClientApplication,
 } from "@azure/msal-browser";
 
@@ -43,11 +44,40 @@ const REDIRECT_URI =
 
 export const isAuthConfigured = CLIENT_ID !== "" && AUTHORITY !== "" && API_SCOPE !== "";
 
+/**
+ * MSAL.js v4 requires an `https://` authority — there is no `localhost`
+ * exception. The HTTP local-lab IdP therefore can't drive the browser login
+ * flow; the pages show a note instead. (The API-side path — `/api/me`,
+ * `/v1/traces`, token verification — works fine over HTTP; see `make smoke`.)
+ * To exercise the SPA login locally, point VITE_TOKEN_TRACKER_AUTHORITY at an
+ * HTTPS IdP (an Entra dev tenant, or the lab IdP behind a trusted-cert proxy).
+ */
+export const loginSupported = isAuthConfigured && /^https:\/\//i.test(AUTHORITY);
+
 const SCOPES = [API_SCOPE];
 
 const msal = new PublicClientApplication({
-	auth: { clientId: CLIENT_ID, authority: AUTHORITY, redirectUri: REDIRECT_URI },
-	cache: { cacheLocation: BrowserCacheLocation.MemoryStorage },
+	auth: {
+		clientId: CLIENT_ID,
+		authority: AUTHORITY,
+		redirectUri: REDIRECT_URI,
+		// Treat the authority as a plain OIDC issuer (discover endpoints from
+		// `<authority>/.well-known/openid-configuration`) rather than an Entra
+		// tenant — works for any compliant OIDC IdP, including Entra v2.0 and the
+		// local lab IdP. Also lets MSAL accept an `http://localhost` authority for
+		// the lab; in AAD mode a non-Entra authority would need knownAuthorities.
+		protocolMode: ProtocolMode.OIDC,
+	},
+	cache: {
+		// The access token lives in memory only (D3). The redirect handshake still
+		// needs somewhere to stash the transient request state (state, nonce, PKCE
+		// verifier) across the navigation to the IdP and back — MSAL requires a
+		// cookie for that when the main cache is memoryStorage, otherwise
+		// loginRedirect throws `in_mem_redirect_unavailable`. That cookie holds
+		// only the in-flight request, not the token, and MSAL clears it on return.
+		cacheLocation: BrowserCacheLocation.MemoryStorage,
+		storeAuthStateInCookie: true,
+	},
 });
 
 let initialized = false;

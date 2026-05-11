@@ -15,7 +15,7 @@ name: token-tracker
 #   Tier 1 — always exposed (real user-facing surfaces):
 #     7000  Grafana       (browser)
 #     7080  API           (browser; also the OTLP /v1/traces target for host pi)
-#     7019  lab IdP       (browser, for the SPA's MSAL flow; the api container reaches the same URL via extra_hosts)
+#     7019  lab IdP       (browser, for the SPA's MSAL flow; the api reaches it over compose DNS at idp:5556)
 #
 #   Tier 2 — lab-only regression fixture for the standard OTel pipeline:
 #     7018  OTel Collector OTLP/HTTP   (used by the seeder + ad-hoc pipeline tests; the API's /v1/traces is the real path)
@@ -26,7 +26,7 @@ name: token-tracker
 #     Collector health    → wait-healthy in Makefile uses Compose status, not host probe
 #
 # All container-internal ports stay at their defaults so service-to-service
-# DNS works (postgres:5432, collector:4318, grafana:3000, api:8080).
+# DNS works (postgres:5432, collector:4318, grafana:3000, api:8080, idp:5556).
 # Only the host-side mapping changes.
 
 services:
@@ -113,12 +113,15 @@ services:
    api:
       # The SPA is built into this image at `vite build` time, so the SPA's
       # MSAL config is baked here via build args (production deployments pass
-      # their own). VITE_TOKEN_TRACKER_API_SCOPE is whatever the IdP maps to
-      # an access token with aud=token-tracker-api; the lab IdP ignores the
-      # scope's specifics and just stamps that aud.
+      # their own). Note: MSAL.js requires an https:// authority — these HTTP
+      # lab values let the SPA show a "SPA login needs an HTTPS IdP" note
+      # (rather than "auth not configured"); they don't make the browser login
+      # flow work here. The API-side path (/api/me, /v1/traces, verification)
+      # works fine over HTTP — see `make smoke`. API_SCOPE is whatever the IdP
+      # maps to an access token with aud=token-tracker-api.
       build:
          args:
-            VITE_TOKEN_TRACKER_AUTHORITY: http://idp.localhost:7019
+            VITE_TOKEN_TRACKER_AUTHORITY: http://localhost:7019
             VITE_TOKEN_TRACKER_CLIENT_ID: token-tracker-spa
             VITE_TOKEN_TRACKER_API_SCOPE: api://token-tracker-api/access_as_user
             VITE_TOKEN_TRACKER_REDIRECT_URI: http://localhost:7080
@@ -126,17 +129,14 @@ services:
          # PUBLIC_URL is what the BROWSER uses to reach this API — it must match
          # the host-side mapping (7080), not the container-internal port (8080).
          PUBLIC_URL: http://localhost:7080
-         # Lab IdP config (the server is a pure resource server — no client
-         # secret, no JWT-signing secret). Production deployments set these via
-         # the deploying organization's secret store / IdP.
-         TOKEN_TRACKER_OIDC_ISSUER_URL: http://idp.localhost:7019
+         # The api reaches the IdP over the compose network (idp:5556) to fetch
+         # the discovery doc; the doc's `issuer` is http://localhost:7019 (what
+         # the browser used, so MSAL is happy) and its `jwks_uri` is the
+         # caller-relative http://idp:5556/jwks (so the api can fetch the keys).
+         # Pure resource server: no client secret, no JWT-signing secret.
+         # Production deployments set these via the deploying org's secret store.
+         TOKEN_TRACKER_OIDC_ISSUER_URL: http://idp:5556
          TOKEN_TRACKER_OIDC_CLIENT_ID: token-tracker-api
-      # idp.localhost resolves to loopback on the browser (RFC 6761) and via
-      # host-gateway here, so the api container reaches the same IdP URL the
-      # browser does — the issuer claim must match what the client used to
-      # fetch the discovery doc.
-      extra_hosts:
-         - "idp.localhost:host-gateway"
       ports:
          - "7080:8080"
       depends_on:
@@ -152,7 +152,10 @@ services:
       build: ../../lab/idp
       restart: unless-stopped
       environment:
-         ISSUER: http://idp.localhost:7019
+         # The issuer the browser uses (host port 7019). The api fetches the
+         # discovery doc over compose DNS (idp:5556); the doc still advertises
+         # this as the `issuer`, and a caller-relative `jwks_uri`.
+         ISSUER: http://localhost:7019
          API_AUDIENCE: token-tracker-api
       ports:
          - "7019:5556"

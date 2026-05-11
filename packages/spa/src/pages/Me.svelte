@@ -1,5 +1,5 @@
 <script lang="ts">
-import { getActiveAccount, isAuthConfigured } from "../lib/auth.js";
+import { getActiveAccount, isAuthConfigured, loginSupported } from "../lib/auth.js";
 import CostTimeseries from "../lib/charts/CostTimeseries.svelte";
 import ModelMix from "../lib/charts/ModelMix.svelte";
 import {
@@ -32,10 +32,17 @@ type PageState =
 	| { kind: "loaded"; data: Loaded }
 	| { kind: "error"; message: string }
 	| { kind: "forbidden"; message: string }
-	| { kind: "not-configured" };
+	| { kind: "not-configured" }
+	| { kind: "login-unsupported" };
+
+function initialState(): PageState {
+	if (!isAuthConfigured) return { kind: "not-configured" };
+	if (!loginSupported) return { kind: "login-unsupported" };
+	return { kind: "loading" };
+}
 
 let rangeDays: RangeKey = $state("7");
-let pageState: PageState = $state(isAuthConfigured ? { kind: "loading" } : { kind: "not-configured" });
+let pageState: PageState = $state(initialState());
 
 function rangeBounds(days: RangeKey): { from: Date; to: Date } {
 	const to = new Date();
@@ -46,6 +53,10 @@ function rangeBounds(days: RangeKey): { from: Date; to: Date } {
 async function load(days: RangeKey): Promise<void> {
 	if (!isAuthConfigured) {
 		pageState = { kind: "not-configured" };
+		return;
+	}
+	if (!loginSupported) {
+		pageState = { kind: "login-unsupported" };
 		return;
 	}
 	if (!getActiveAccount()) {
@@ -110,6 +121,12 @@ $effect(() => {
 	{:else if pageState.kind === "not-configured"}
 		<p class="mt-12 text-slate-600 dark:text-slate-400">
 			Auth isn't configured — set <code>VITE_TOKEN_TRACKER_*</code> and rebuild the SPA.
+		</p>
+	{:else if pageState.kind === "login-unsupported"}
+		<p class="mt-12 text-slate-600 dark:text-slate-400">
+			MSAL.js requires an <code>https://</code> authority — the local lab serves its IdP over HTTP, so the SPA
+			login flow can't run here. The API works directly (try <code>make smoke</code>); to exercise the SPA
+			login, point <code>VITE_TOKEN_TRACKER_AUTHORITY</code> at an HTTPS IdP.
 		</p>
 	{:else if pageState.kind === "forbidden"}
 		<p class="mt-12 text-amber-600">{pageState.message}</p>

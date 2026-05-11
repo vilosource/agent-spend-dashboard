@@ -1,11 +1,17 @@
 <script lang="ts">
-import { getActiveAccount, isAuthConfigured, login } from "../lib/auth.js";
+import { getActiveAccount, isAuthConfigured, login, loginSupported } from "../lib/auth.js";
 
 // initializeAuth() ran in main.ts before mount, so by now MSAL has
 // processed any redirect-back and attempted a silent SSO. If we have an
 // account, the user is signed in — send them to their dashboard.
-let status: "not-configured" | "redirecting" | "anonymous" = $state(
-	!isAuthConfigured ? "not-configured" : getActiveAccount() ? "redirecting" : "anonymous",
+let status: "not-configured" | "login-unsupported" | "redirecting" | "anonymous" = $state(
+	!isAuthConfigured
+		? "not-configured"
+		: !loginSupported
+			? "login-unsupported"
+			: getActiveAccount()
+				? "redirecting"
+				: "anonymous",
 );
 
 $effect(() => {
@@ -28,6 +34,16 @@ $effect(() => {
 				Set <code>VITE_TOKEN_TRACKER_AUTHORITY</code>, <code>VITE_TOKEN_TRACKER_CLIENT_ID</code> and
 				<code>VITE_TOKEN_TRACKER_API_SCOPE</code> and rebuild the SPA. See
 				<code>docs/design/token-tracker-redesign-DESIGN.md</code> §4.2.
+			</p>
+		</div>
+	{:else if status === "login-unsupported"}
+		<div class="mt-12 rounded-xl bg-white p-8 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+			<h2 class="text-xl font-semibold">SPA login needs an HTTPS IdP</h2>
+			<p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
+				MSAL.js requires an <code>https://</code> authority. The local lab serves its IdP over HTTP, so the
+				browser login flow can't run here — but the API works: get a token from the lab IdP's
+				<code>/lab/token</code> shortcut (or run <code>make smoke</code>). To exercise the SPA login, point
+				<code>VITE_TOKEN_TRACKER_AUTHORITY</code> at an HTTPS IdP.
 			</p>
 		</div>
 	{:else}

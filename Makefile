@@ -19,8 +19,12 @@ lab: lab-up wait-healthy ## Bring the lab up (Postgres + Grafana + api + SPA + l
 	@echo
 	@echo "Lab is up:"
 	@echo "  Grafana:   http://localhost:7000  (anonymous viewer; admin/admin to log in)"
-	@echo "  API + SPA: http://localhost:7080  (sign in via the lab IdP; /v1/traces is the OTLP ingest path)"
-	@echo "  lab IdP:   http://idp.localhost:7019  (identities: lab-admin / lab-user / lab-viewer — no passwords)"
+	@echo "  API + SPA: http://localhost:7080  (/v1/traces is the OTLP ingest path)"
+	@echo "  lab IdP:   http://localhost:7019  (identities: lab-admin / lab-user / lab-viewer — no passwords)"
+	@echo
+	@echo "  Note: MSAL.js needs an https:// authority, so the SPA login button doesn't"
+	@echo "  work against the HTTP lab IdP. The API does — 'make smoke' or:"
+	@echo "    curl -s -X POST http://localhost:7019/lab/token -d user=lab-admin@example.invalid"
 	@echo
 	@echo "  For Postgres:  make psql  (no host port mapping by design)"
 	@echo

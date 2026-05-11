@@ -155,7 +155,6 @@ const ENDPOINTS = {
 	authorization_endpoint: `${ISSUER}/authorize`,
 	token_endpoint: `${ISSUER}/token`,
 	device_authorization_endpoint: `${ISSUER}/device_authorization`,
-	jwks_uri: `${ISSUER}/jwks`,
 };
 
 createServer(async (req, res) => {
@@ -168,6 +167,11 @@ createServer(async (req, res) => {
 			return sendJson(res, 200, {
 				issuer: ISSUER,
 				...ENDPOINTS,
+				// Host-relative so each caller gets a JWKs URL it can actually reach:
+				// the browser fetches the discovery doc via the host port mapping
+				// (Host: localhost:7019), the resource server via compose DNS
+				// (Host: idp:5556) — both then fetch /jwks at the host they used.
+				jwks_uri: `http://${req.headers.host || ISSUER.replace(/^https?:\/\//, "")}/jwks`,
 				response_types_supported: ["code"],
 				grant_types_supported: ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
 				subject_types_supported: ["public"],

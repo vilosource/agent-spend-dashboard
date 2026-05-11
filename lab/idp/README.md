@@ -37,23 +37,35 @@ localhost.
 
 ## Config (env)
 
-- `ISSUER` — the issuer URL (must match what clients use to reach it). The lab
-  uses `http://idp.localhost:7019`.
+- `ISSUER` — the `issuer` claim (and the `authorization_endpoint` / `token_endpoint`
+  base). It's what the browser uses, so the lab sets it to `http://localhost:7019`
+  (MSAL.js only accepts an `http://` authority when the host is `localhost`). The
+  discovery doc's `jwks_uri` is caller-relative (`http://<request Host>/jwks`), so
+  a caller reaching the IdP via a different host (e.g. compose DNS) still gets a
+  fetchable keys URL while the `issuer` stays fixed.
 - `API_AUDIENCE` — the `aud` stamped on access tokens. Default `token-tracker-api`;
   must equal the API's `TOKEN_TRACKER_OIDC_CLIENT_ID`.
 - `PORT` — default `5556`.
 
 ## In the lab
 
-`compose.override.yml` runs this as the `idp` service (host port `7019`). The
-api container reaches it at `http://idp.localhost:7019` via `extra_hosts:
-idp.localhost:host-gateway`; the browser resolves `*.localhost` to loopback
-(RFC 6761). The SPA's `VITE_TOKEN_TRACKER_*` build args (passed by the api
-service's `build.args`) point at the same issuer.
+`compose.override.yml` runs this as the `idp` service. The browser reaches it
+at `http://localhost:7019` (host port mapping); the api container reaches it at
+`http://idp:5556` (compose DNS — `TOKEN_TRACKER_OIDC_ISSUER_URL`) to fetch the
+discovery doc, whose `issuer` is still `http://localhost:7019` and whose
+`jwks_uri` comes back as `http://idp:5556/jwks` so the api can fetch the keys.
+
+**MSAL.js requires an `https://` authority** (no `localhost` exception), so the
+SPA's browser login flow can't run against this HTTP IdP — the `/me` page shows
+a "SPA login needs an HTTPS IdP" note. Everything else works over HTTP: the API
+verifies these tokens, `/v1/traces` ingest works (`make smoke`), and the
+scenario harness uses `/lab/token` below. To exercise the SPA login locally,
+point `VITE_TOKEN_TRACKER_AUTHORITY` at an HTTPS IdP (an Entra dev tenant, or
+this IdP behind a trusted-cert proxy).
 
 Get a bearer from the shell:
 
 ```bash
-curl -s -X POST http://idp.localhost:7019/lab/token -d user=lab-user@example.invalid | jq -r .access_token
+curl -s -X POST http://localhost:7019/lab/token -d user=lab-user@example.invalid | jq -r .access_token
 # or: scripts/scenario mint lab-user@example.invalid
 ```
