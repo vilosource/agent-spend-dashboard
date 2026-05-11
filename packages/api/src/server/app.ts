@@ -71,11 +71,11 @@ export function createApp(deps: AppDeps): Express {
 
 function renderSpaMissing(publicUrl: string): string {
 	return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Agent Spend</title></head>
+<html lang="en"><head><meta charset="utf-8"><title>Token Tracker</title></head>
 <body style="font-family: system-ui, sans-serif; max-width: 38em; margin: 4em auto; padding: 0 1em;">
-<h1>Agent Spend</h1>
+<h1>Token Tracker</h1>
 <p>The API is running but the SPA bundle isn't built yet.</p>
-<p>From the repo root: <code>npm run -w @vilosource/agent-spend-spa build</code></p>
+<p>From the repo root: <code>npm run -w @vilosource/token-tracker-spa build</code></p>
 <p>Public URL: <code>${publicUrl}</code></p>
 <p>API surface: <a href="/health"><code>/health</code></a> · <a href="/api/me"><code>/api/me</code></a></p>
 </body></html>

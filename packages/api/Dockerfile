@@ -1,4 +1,4 @@
-# Multi-stage build for @vilosource/agent-spend-api + the SPA bundle.
+# Multi-stage build for @vilosource/token-tracker-api + the SPA bundle.
 #
 # Stage 1: install workspace deps + build the SPA (Vite outputs to
 #          packages/api/dist/spa/) AND the API TypeScript.
@@ -11,7 +11,7 @@ WORKDIR /repo
 
 # Copy the monorepo manifest, lockfile, tsconfig + every workspace
 # package.json so npm install resolves the full workspace graph
-# (including @vilosource/agent-spend-spa).
+# (including @vilosource/token-tracker-spa).
 COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
 COPY packages/_template/package.json ./packages/_template/
 COPY packages/api/package.json ./packages/api/
@@ -27,8 +27,8 @@ COPY packages/spa ./packages/spa
 # before the API build runs. The order doesn't strictly matter — both
 # write into different subtrees of dist/ — but keeping it deterministic
 # helps when reading build logs.
-RUN npm run -w @vilosource/agent-spend-spa build
-RUN npm run -w @vilosource/agent-spend-api build
+RUN npm run -w @vilosource/token-tracker-spa build
+RUN npm run -w @vilosource/token-tracker-api build
 
 # Stage 2: lean runtime
 FROM node:20.18-bookworm-slim AS runtime

@@ -1,9 +1,9 @@
 {
-	"name": "@vilosource/agent-spend-spa",
+	"name": "@vilosource/token-tracker-spa",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Agent Spend SPA — Svelte 5 + Tailwind 4 frontend served by the Express api at /. Per docs/design/api-and-spa-DESIGN.md §6.",
+	"description": "Token Tracker SPA — Svelte 5 + Tailwind 4 frontend served by the Express api at /. Per docs/design/api-and-spa-DESIGN.md §6.",
 	"license": "MIT",
 	"scripts": {
 		"build": "vite build",

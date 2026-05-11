@@ -23,7 +23,7 @@ $effect(() => {
 </script>
 
 <main class="mx-auto max-w-2xl px-6 py-16">
-	<h1 class="text-3xl font-semibold tracking-tight">Agent Spend</h1>
+	<h1 class="text-3xl font-semibold tracking-tight">Token Tracker</h1>
 	<p class="mt-2 text-slate-600 dark:text-slate-400">
 		The reference dashboard server for tracking developer LLM spend across harnesses.
 	</p>

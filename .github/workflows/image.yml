@@ -50,8 +50,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           # Image namespace = ghcr.io/<owner-lowercase>/<repo>.
-          # For vilosource/agent-spend-dashboard that resolves to
-          # ghcr.io/vilosource/agent-spend-dashboard.
+          # For vilosource/token-tracker that resolves to
+          # ghcr.io/vilosource/token-tracker.
           images: ghcr.io/${{ github.repository }}
           # Manual builds always tag :latest + :sha-<short>. When push
           # triggers come back, the type=ref/type=tag entries will fire
@@ -60,7 +60,7 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest
           labels: |
-            org.opencontainers.image.title=agent-spend-dashboard
+            org.opencontainers.image.title=token-tracker
             org.opencontainers.image.description=Per-developer agent token-usage telemetry dashboard. Single Express+SPA binary serving /api/me, /v1/traces ingest, OIDC auth.
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=MIT

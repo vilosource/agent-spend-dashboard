@@ -1,6 +1,6 @@
-# `@vilosource/agent-spend-dashboard-template`
+# `@vilosource/token-tracker-template`
 
-**Not a published package.** This is the scaffold for new packages in `vilosource/agent-spend-dashboard`.
+**Not a published package.** This is the scaffold for new packages in `vilosource/token-tracker`.
 
 ## How to start a new package
 
@@ -28,4 +28,4 @@ These are conventions humans (and AI agents) follow because the codebase reads b
 - **Errors have meaning.** Throw `new Error("descriptive message")`, not `throw "string"`. Catch with `useUnknownInCatchVariables` discipline (the catch parameter is `unknown` and must be narrowed before use).
 - **Side effects are concentrated.** Push IO to the edges (`src/server/`, `src/cli/`); keep `src/shared/` pure.
 
-See the [agent-spend-dashboard repo's strategy docs](../../docs/strategy/) for the broader rationale.
+See the [token-tracker repo's strategy docs](../../docs/strategy/) for the broader rationale.

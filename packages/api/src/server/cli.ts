@@ -26,7 +26,7 @@ const app = createApp({
 });
 
 const server = app.listen(cfg.port, () => {
-	console.log(`agent-spend-api listening on ${cfg.publicUrl}`);
+	console.log(`token-tracker-api listening on ${cfg.publicUrl}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

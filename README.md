@@ -1,4 +1,4 @@
-# agent-spend-dashboard
+# token-tracker
 
 Per-developer LLM spend dashboard for coding-agent harnesses.
 

@@ -19,7 +19,7 @@ export default defineConfig({
 	server: {
 		// Local dev: Vite serves on a separate port. To exercise auth
 		// flows during development, prefer building (`npm run -w
-		// @vilosource/agent-spend-spa build`) and reloading the API,
+		// @vilosource/token-tracker-spa build`) and reloading the API,
 		// or run the dev server with a manual proxy. Production is
 		// always built + served by the API.
 		port: 5173,

@@ -1,8 +1,8 @@
 {
-   "name": "agent-spend-dashboard-monorepo",
+   "name": "token-tracker-monorepo",
    "private": true,
    "type": "module",
-   "description": "Agent Spend dashboard reference server: API + SPA + OTLP ingest. See docs/strategy/scope-and-deployment-STRATEGY.md (in vilosource/pi-extensions) for the three-artifact split this repo participates in.",
+   "description": "Token Tracker reference server: API + SPA + OTLP ingest. See docs/strategy/scope-and-deployment-STRATEGY.md (in vilosource/pi-extensions) for the three-artifact split this repo participates in.",
    "license": "MIT",
    "workspaces": [
       "packages/*"

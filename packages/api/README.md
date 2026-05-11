@@ -1,6 +1,6 @@
-# `@vilosource/agent-spend-api`
+# `@vilosource/token-tracker-api`
 
-The Agent Spend API + SPA + OTLP ingest service. **Private package** — not published to npm.
+The Token Tracker API + SPA + OTLP ingest service. **Private package** — not published to npm.
 
 Single Express service that serves three URL spaces behind one TCP port:
 

@@ -89,14 +89,14 @@ describe("createApp", () => {
 	it("GET / returns 503 + a clear 'build the SPA' message when the bundle is missing", async () => {
 		// In the test process import.meta.url resolves to .../packages/api/src/server/app.ts,
 		// so SPA_DIR resolves to packages/api/src/spa (which never exists). This is the
-		// dev-time path before someone runs `npm run -w @vilosource/agent-spend-spa build`.
+		// dev-time path before someone runs `npm run -w @vilosource/token-tracker-spa build`.
 		await withRunningApp(async (baseUrl) => {
 			const res = await fetch(`${baseUrl}/`);
 			expect(res.status).toBe(503);
 			expect(res.headers.get("content-type")).toMatch(/text\/html/);
 			const body = await res.text();
-			expect(body).toContain("Agent Spend");
-			expect(body).toContain("agent-spend-spa");
+			expect(body).toContain("Token Tracker");
+			expect(body).toContain("token-tracker-spa");
 		});
 	});
 

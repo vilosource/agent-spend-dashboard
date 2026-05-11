@@ -1,14 +1,14 @@
 {
-	"name": "@vilosource/agent-spend-api",
+	"name": "@vilosource/token-tracker-api",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Agent Spend API + SPA + OTLP ingest. Single Express service per docs/design/api-and-spa-DESIGN.md.",
+	"description": "Token Tracker API + SPA + OTLP ingest. Single Express service per docs/design/api-and-spa-DESIGN.md.",
 	"license": "MIT",
 	"main": "./dist/server/index.js",
 	"types": "./dist/server/index.d.ts",
 	"bin": {
-		"agent-spend-api": "./dist/server/cli.js"
+		"token-tracker-api": "./dist/server/cli.js"
 	},
 	"files": [
 		"dist",
