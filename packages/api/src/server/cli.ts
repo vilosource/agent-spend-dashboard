@@ -2,26 +2,25 @@
 /**
  * Bin entry. Boots the Express app on the configured port.
  *
- * IO is concentrated here: load env, connect Postgres, do OIDC
- * discovery, then hand a fully-wired set of deps to createApp.
- * Discovery failure is fatal — bad OIDC config should crash the
- * process, not silently 500 every login.
+ * IO is concentrated here: load env, connect Postgres, build the IdP
+ * verifier (its discovery + JWKs fetch are lazy — on first authenticated
+ * request — so boot doesn't depend on the IdP being reachable), then
+ * hand a fully-wired set of deps to createApp.
  */
 
 import { createApp } from "./app.js";
-import { configureOidc } from "./auth/oidc.js";
+import { createVerifier } from "./auth/idp.js";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db.js";
 
 const cfg = loadConfig();
 
 const db = createDb(cfg.databaseUrl);
-const oidc = await configureOidc(cfg.oidc);
+const verifier = createVerifier(cfg.oidc);
 
 const app = createApp({
 	publicUrl: cfg.publicUrl,
-	jwtSecret: cfg.jwtSecret,
-	oidc,
+	verifier,
 	db,
 });
 

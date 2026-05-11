@@ -6,10 +6,8 @@ import { loadConfig } from "./config.js";
 
 const baseEnv = {
 	DATABASE_URL: "postgresql://localhost/test",
-	AGENT_SPEND_JWT_SECRET: "test-secret",
-	AGENT_SPEND_OIDC_ISSUER_URL: "http://idp.localhost:7019",
-	AGENT_SPEND_OIDC_CLIENT_ID: "agent-spend",
-	AGENT_SPEND_OIDC_CLIENT_SECRET: "test-client-secret",
+	TOKEN_TRACKER_OIDC_ISSUER_URL: "https://idp.example.invalid/tenant/v2.0",
+	TOKEN_TRACKER_OIDC_CLIENT_ID: "token-tracker-api",
 };
 
 describe("loadConfig", () => {
@@ -18,10 +16,8 @@ describe("loadConfig", () => {
 		expect(cfg.port).toBe(8080);
 		expect(cfg.publicUrl).toBe("http://localhost:8080");
 		expect(cfg.databaseUrl).toBe(baseEnv.DATABASE_URL);
-		expect(cfg.jwtSecret).toBe(baseEnv.AGENT_SPEND_JWT_SECRET);
-		expect(cfg.oidc.issuerUrl).toBe(baseEnv.AGENT_SPEND_OIDC_ISSUER_URL);
-		expect(cfg.oidc.clientId).toBe(baseEnv.AGENT_SPEND_OIDC_CLIENT_ID);
-		expect(cfg.oidc.clientSecret).toBe(baseEnv.AGENT_SPEND_OIDC_CLIENT_SECRET);
+		expect(cfg.oidc.issuerUrl).toBe(baseEnv.TOKEN_TRACKER_OIDC_ISSUER_URL);
+		expect(cfg.oidc.clientId).toBe(baseEnv.TOKEN_TRACKER_OIDC_CLIENT_ID);
 	});
 
 	it("respects PORT", () => {
@@ -49,12 +45,6 @@ describe("loadConfig", () => {
 		expect(() => loadConfig({ ...baseEnv, PORT: "0" })).toThrow(/Invalid PORT/);
 	});
 
-	it("throws when AGENT_SPEND_JWT_SECRET is missing", () => {
-		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = undefined;
-		expect(() => loadConfig(env)).toThrow(/AGENT_SPEND_JWT_SECRET/);
-	});
-
 	it("throws when DATABASE_URL is missing", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
 		env["DATABASE_URL"] = undefined;
@@ -62,11 +52,7 @@ describe("loadConfig", () => {
 	});
 
 	it("throws when any OIDC variable is missing", () => {
-		for (const name of [
-			"AGENT_SPEND_OIDC_ISSUER_URL",
-			"AGENT_SPEND_OIDC_CLIENT_ID",
-			"AGENT_SPEND_OIDC_CLIENT_SECRET",
-		]) {
+		for (const name of ["TOKEN_TRACKER_OIDC_ISSUER_URL", "TOKEN_TRACKER_OIDC_CLIENT_ID"]) {
 			const env = { ...baseEnv } as Record<string, string | undefined>;
 			env[name] = undefined;
 			expect(() => loadConfig(env)).toThrow(new RegExp(name));
@@ -80,7 +66,7 @@ describe("loadConfig — *_FILE Docker-secrets fallback", () => {
 	let tmp: string;
 
 	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "agent-spend-cfg-"));
+		tmp = mkdtempSync(join(tmpdir(), "token-tracker-cfg-"));
 	});
 
 	afterEach(() => {
@@ -93,71 +79,44 @@ describe("loadConfig — *_FILE Docker-secrets fallback", () => {
 		return path;
 	};
 
-	it("reads AGENT_SPEND_JWT_SECRET from _FILE when set", () => {
+	it("reads DATABASE_URL from _FILE when set", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = undefined;
-		env["AGENT_SPEND_JWT_SECRET_FILE"] = writeSecret("jwt", "from-file-secret");
-		const cfg = loadConfig(env);
-		expect(cfg.jwtSecret).toBe("from-file-secret");
+		env["DATABASE_URL"] = undefined;
+		env["DATABASE_URL_FILE"] = writeSecret("db", "postgresql://from-file-host/db");
+		expect(loadConfig(env).databaseUrl).toBe("postgresql://from-file-host/db");
 	});
 
 	it("trims whitespace from file contents", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = undefined;
-		env["AGENT_SPEND_JWT_SECRET_FILE"] = writeSecret("jwt", "  trimmed-secret\n");
-		const cfg = loadConfig(env);
-		expect(cfg.jwtSecret).toBe("trimmed-secret");
+		env["TOKEN_TRACKER_OIDC_CLIENT_ID"] = undefined;
+		env["TOKEN_TRACKER_OIDC_CLIENT_ID_FILE"] = writeSecret("cid", "  trimmed-id\n");
+		expect(loadConfig(env).oidc.clientId).toBe("trimmed-id");
 	});
 
 	it("_FILE wins when both _FILE and the bare env var are set", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = "bare-env-value";
-		env["AGENT_SPEND_JWT_SECRET_FILE"] = writeSecret("jwt", "file-value");
-		const cfg = loadConfig(env);
-		expect(cfg.jwtSecret).toBe("file-value");
-	});
-
-	it("works for DATABASE_URL_FILE", () => {
-		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["DATABASE_URL"] = undefined;
-		env["DATABASE_URL_FILE"] = writeSecret("db", "postgresql://from-file-host/db");
-		const cfg = loadConfig(env);
-		expect(cfg.databaseUrl).toBe("postgresql://from-file-host/db");
-	});
-
-	it("works for AGENT_SPEND_OIDC_CLIENT_SECRET_FILE", () => {
-		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_OIDC_CLIENT_SECRET"] = undefined;
-		env["AGENT_SPEND_OIDC_CLIENT_SECRET_FILE"] = writeSecret("oidc-cs", "file-client-secret");
-		const cfg = loadConfig(env);
-		expect(cfg.oidc.clientSecret).toBe("file-client-secret");
-	});
-
-	it("works for AGENT_SPEND_OIDC_CLIENT_ID_FILE", () => {
-		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_OIDC_CLIENT_ID"] = undefined;
-		env["AGENT_SPEND_OIDC_CLIENT_ID_FILE"] = writeSecret("oidc-cid", "file-client-id");
-		const cfg = loadConfig(env);
-		expect(cfg.oidc.clientId).toBe("file-client-id");
+		env["TOKEN_TRACKER_OIDC_ISSUER_URL"] = "https://bare.example.invalid";
+		env["TOKEN_TRACKER_OIDC_ISSUER_URL_FILE"] = writeSecret("iss", "https://from-file.example.invalid");
+		expect(loadConfig(env).oidc.issuerUrl).toBe("https://from-file.example.invalid");
 	});
 
 	it("throws clearly when _FILE points at a missing path", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = undefined;
-		env["AGENT_SPEND_JWT_SECRET_FILE"] = "/nonexistent/path/jwt";
-		expect(() => loadConfig(env)).toThrow(/AGENT_SPEND_JWT_SECRET_FILE/);
+		env["DATABASE_URL"] = undefined;
+		env["DATABASE_URL_FILE"] = "/nonexistent/path/db";
+		expect(() => loadConfig(env)).toThrow(/DATABASE_URL_FILE/);
 	});
 
 	it("throws clearly when _FILE points at an empty file", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = undefined;
-		env["AGENT_SPEND_JWT_SECRET_FILE"] = writeSecret("empty", "");
+		env["DATABASE_URL"] = undefined;
+		env["DATABASE_URL_FILE"] = writeSecret("empty", "");
 		expect(() => loadConfig(env)).toThrow(/empty/);
 	});
 
 	it("error message mentions both <NAME> and <NAME>_FILE when neither is set", () => {
 		const env = { ...baseEnv } as Record<string, string | undefined>;
-		env["AGENT_SPEND_JWT_SECRET"] = undefined;
-		expect(() => loadConfig(env)).toThrow(/AGENT_SPEND_JWT_SECRET.*AGENT_SPEND_JWT_SECRET_FILE/s);
+		env["DATABASE_URL"] = undefined;
+		expect(() => loadConfig(env)).toThrow(/DATABASE_URL.*DATABASE_URL_FILE/s);
 	});
 });

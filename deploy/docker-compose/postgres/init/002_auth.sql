@@ -1,7 +1,9 @@
--- Auth schema: users, teams, api_tokens, budgets, audit_log.
--- See https://github.com/vilosource/agent-spend-dashboard/blob/main/docs/design/api-and-spa-DESIGN.md §9
+-- Auth schema: users, teams, budgets, audit_log.
+-- See docs/design/token-tracker-redesign-DESIGN.md (§4) for the auth model;
+-- docs/design/api-and-spa-DESIGN.md §9 for the original table inventory (its
+-- auth model is superseded — no api_tokens, no users.role).
 --
--- Per phase 0.3.2 we are pre-production with no real users. This file lands
+-- We are pre-production with no real users. This file lands
 -- alongside 001_schema.sql in the Postgres init directory; both run on first
 -- startup of an empty data volume. To apply this file you must drop the
 -- volume: `make reset` (which is `docker compose down -v && make lab && make seed`).
@@ -33,25 +35,24 @@ CREATE TABLE IF NOT EXISTS teams (
 -- =============================================================================
 -- users
 -- =============================================================================
--- One row per authenticated identity. Populated on first OIDC login from JWT
--- claims (sub, email). Per D8/D13: identity is JWT-only; no env-var override.
+-- One row per authenticated identity, lazily upserted on each authenticated
+-- request from the IdP access token (email, name, oid). The server is a pure
+-- resource server: it issues no tokens, so there is no `api_tokens` table.
 --
--- role: 'admin' can issue/revoke tokens for any user, set budgets, view all
---       data; 'developer' can only manage their own tokens and view their own
---       data plus their team's rollup. First user to log in becomes admin
---       (bootstrap rule documented in authentication-STRATEGY.md).
+-- Role is NOT stored. It is read from the token's `roles` claim every request
+-- (token-tracker-redesign-DESIGN.md D7); IdP group-membership changes propagate
+-- on next token refresh, so there is nothing to keep in sync here.
 --
--- last_seen_at is updated on each authenticated request, but we do this in
--- batched writes (not on every request) — see api-and-spa-DESIGN.md §12 open
--- question. Column exists; the code that updates it is deferred to phase 0.3.6.
-
-CREATE TYPE user_role AS ENUM ('admin', 'developer');
+-- oid: the IdP's stable object id, when the token carries it. email stays the
+--      natural key — the usage rows join on email.
+-- last_seen_at: bumped on every authenticated request (a cheap idempotent upsert
+--      on a tiny table — no batching needed for an internal tool).
 
 CREATE TABLE IF NOT EXISTS users (
    id            BIGSERIAL    PRIMARY KEY,
    email         TEXT         NOT NULL UNIQUE,
    name          TEXT,
-   role          user_role    NOT NULL DEFAULT 'developer',
+   oid           TEXT,
    team_id       BIGINT       REFERENCES teams(id) ON DELETE SET NULL,
    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -59,62 +60,6 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_team_id ON users(team_id);
-CREATE INDEX IF NOT EXISTS idx_users_role    ON users(role);
-
--- =============================================================================
--- api_tokens
--- =============================================================================
--- Per-machine tokens. D9: one developer with three machines (laptop, dev VM,
--- CI runner) gets three tokens, each individually revocable.
---
--- BROWSER SESSIONS DO NOT APPEAR HERE (D14). Browser cookies carry the same
--- JWT format but are stateless — verified by signature alone. Only named,
--- long-lived machine tokens get a row in this table; the row IS the
--- revocation primitive.
---
--- token_hash: SHA-256 of the issued JWT, hex-encoded (64 chars). NOT bcrypt
---   (D14 supersedes the original draft of this comment). Tokens are
---   high-entropy random JWTs (≥ 256 bits); SHA-256 is the right primitive
---   because it's deterministic — the request path can do
---   `WHERE token_hash = $1` for an O(1) lookup. Bcrypt's random salt would
---   force an O(n) bcrypt.compare() per request and break the hot path.
--- expires_at: 90 days from issuance (forced rotation without being painful).
--- revoked_at: soft-delete; rows are kept for audit purposes.
--- last_used_at: for staleness reports / "which tokens haven't been used in 30
---               days, please revoke" admin views. Updated inline per request
---               in v1 (0.3.6); batching is open question §12 in the design doc,
---               revisited when 0.3.7 OTLP ingest produces measurable load.
-
-CREATE TABLE IF NOT EXISTS api_tokens (
-   id            BIGSERIAL    PRIMARY KEY,
-   user_id       BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-   label         TEXT         NOT NULL,           -- e.g. "laptop", "dev-vm", "ci"
-   token_hash    TEXT         NOT NULL,           -- sha256(jwt) hex; see D14
-   expires_at    TIMESTAMPTZ  NOT NULL,
-   created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
-   last_used_at  TIMESTAMPTZ,
-   revoked_at    TIMESTAMPTZ,
-
-   -- A user shouldn't have two active tokens with the same label; once one is
-   -- revoked, the label can be reused. Partial unique index handles this.
-   CONSTRAINT api_tokens_label_nonempty CHECK (length(label) > 0)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_user_label_active
-   ON api_tokens(user_id, label)
-   WHERE revoked_at IS NULL;
-
--- Hot-path lookup: every authenticated bearer request does
--- `WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()`.
--- Partial unique index keeps the index small (revoked rows aren't kept hot)
--- AND enforces the invariant that no two active tokens share a hash. (D14.)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_token_hash_active
-   ON api_tokens(token_hash)
-   WHERE revoked_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id     ON api_tokens(user_id);
-CREATE INDEX IF NOT EXISTS idx_api_tokens_expires_at  ON api_tokens(expires_at)
-   WHERE revoked_at IS NULL;
 
 -- =============================================================================
 -- budgets
@@ -188,8 +133,8 @@ CREATE OR REPLACE RULE audit_log_no_delete AS
 -- updated_at trigger for users
 -- =============================================================================
 -- Only users has updated_at among these tables (teams is immutable enough,
--- api_tokens uses revoked_at as its mutation, budgets are append-only by
--- effective_from, audit_log is rule-enforced append-only).
+-- budgets are append-only by effective_from, audit_log is rule-enforced
+-- append-only).
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$

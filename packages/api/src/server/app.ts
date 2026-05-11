@@ -1,16 +1,20 @@
 /**
  * Express app factory.
  *
- * Per the design (§2.1), three URL spaces share one port:
+ * URL spaces sharing one port:
  *   /              → SPA static bundle (Svelte 5; built into ../spa/)
  *   /health        → liveness probe
  *   /api/me*       → authenticated identity + own-data endpoints
- *   /auth/*        → OIDC login/callback/logout
- *   /v1/traces     → OTLP ingest (bearer-only, phase 0.3.7)
+ *   /v1/traces     → OTLP ingest
  *
- * The factory pattern keeps IO (`listen`, db connections, OIDC
- * discovery) separate from app construction so tests can wire a
- * fake `Db` and a real-Dex `OidcContext` independently.
+ * `/api/*` and `/v1/traces` require `Authorization: Bearer <IdP access
+ * token>`; the server verifies it against the IdP's JWKs and issues
+ * nothing itself. There is no `/auth/*` — the SPA does the OIDC dance
+ * client-side (MSAL.js); the CLI uses the device flow.
+ *
+ * The factory pattern keeps IO (`listen`, db connections) separate from
+ * app construction so tests can wire a fake `Db` and a `Verifier`
+ * independently.
  */
 
 import { existsSync } from "node:fs";
@@ -18,17 +22,14 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express, type Request, type Response } from "express";
 import { VERSION } from "../shared/version.js";
-import type { OidcContext } from "./auth/oidc.js";
-import { authRoutes } from "./auth/routes.js";
+import type { Verifier } from "./auth/idp.js";
 import type { Db } from "./db.js";
 import { ingestRoutes } from "./ingest/routes.js";
 import { meRoutes } from "./me/routes.js";
-import { tokensRoutes } from "./me/tokens.js";
 
 export interface AppDeps {
 	readonly publicUrl: string;
-	readonly jwtSecret: string;
-	readonly oidc: OidcContext;
+	readonly verifier: Verifier;
 	readonly db: Db;
 }
 
@@ -42,17 +43,15 @@ export function createApp(deps: AppDeps): Express {
 		res.json({ status: "ok", version: VERSION });
 	});
 
-	app.use("/auth", authRoutes(deps));
-	app.use(ingestRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
-	app.use("/api", meRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
-	app.use("/api", tokensRoutes({ db: deps.db, jwtSecret: deps.jwtSecret }));
+	app.use(ingestRoutes({ db: deps.db, verifier: deps.verifier }));
+	app.use("/api", meRoutes({ db: deps.db, verifier: deps.verifier }));
 
 	if (existsSync(SPA_DIR)) {
 		// SPA bundle is present — serve it. Static assets first; any
 		// other GET falls through to index.html so client-side
 		// navigation to /me works on direct URL load.
 		app.use(express.static(SPA_DIR, { index: false }));
-		app.get(/^\/(?!api\/|auth\/|v1\/|health$|static\/).*/, (_req, res) => {
+		app.get(/^\/(?!api\/|v1\/|health$|static\/).*/, (_req, res) => {
 			res.sendFile(resolve(SPA_DIR, "index.html"));
 		});
 	} else {

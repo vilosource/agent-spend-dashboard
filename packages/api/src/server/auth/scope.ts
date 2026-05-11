@@ -1,15 +1,15 @@
 /**
- * Row-scoping SQL helper. Per design §4.2 the API enforces
- * authorization in the SQL `WHERE` clause, derived from the
- * authenticated identity. Every endpoint that queries
- * `agent_spend_logs` AND-s the result of this function into its
- * WHERE — tests assert the right scope fires for each role.
+ * Row-scoping SQL helper. The API enforces authorization in the SQL
+ * `WHERE` clause, derived from the authenticated identity (its `role`,
+ * mapped from the token's `roles` claim — see middleware.ts). Every
+ * endpoint that queries the usage table AND-s the result of this
+ * function into its WHERE — tests assert the right scope fires per role.
  *
- * v1 roles in schema: admin, developer (see init/002_auth.sql).
- * The design also names `team_lead` (own + own team), but the schema
- * doesn't carry that role yet; it's deferred until the role enum and
- * the team-membership lookup land together. For now the helper
- * collapses to: admin → unrestricted, developer → own rows only.
+ * Internal roles: admin / user / viewer (from `TokenTracker.Admin`,
+ * `.User`, `.Viewer`). At the row level v1 only distinguishes admin
+ * (unrestricted) from everyone else (own rows only); the user/viewer
+ * split will matter once there are write endpoints, which there aren't
+ * yet.
  */
 
 import type { Identity } from "./middleware.js";
@@ -25,7 +25,7 @@ export function rowScope(identity: Identity): RowScope {
 	if (identity.role === "admin") {
 		return { sql: "TRUE", params: [] };
 	}
-	// developer (or anything else, defensively) — own rows only.
+	// user / viewer (or anything else, defensively) — own rows only.
 	return { sql: "user_id = $1", params: [identity.email] };
 }
 

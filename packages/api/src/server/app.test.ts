@@ -1,41 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
-import type { OidcContext } from "./auth/oidc.js";
-import type { ActiveTokenRow, Db, InsertApiTokenInput, UserRole, UserRow } from "./db.js";
+import { AuthError, type Verifier } from "./auth/idp.js";
+import type { Db } from "./db.js";
 
 /**
- * createApp's deps include a real OidcContext and a Db. For the
- * non-auth surface (`/health`, `/`, unauthenticated `/api/me`) we don't
- * need either to actually function — only their shapes — so we cast
- * minimal placeholders. The full OIDC flow is covered by
- * auth/oidc.integration.test.ts (testcontainers); the requireAuth
- * middleware is unit-tested in auth/middleware.test.ts.
+ * createApp's deps are a `Verifier` and a `Db`. The non-auth surface
+ * exercised here (`/health`, `/`, unauthenticated `/api/me`) never
+ * reaches a successful token verification, so a stub verifier and a
+ * no-op fake Db are enough. The verifier itself is unit-tested in
+ * auth/idp.test.ts; the middleware in auth/middleware.test.ts.
  */
 function makeFakeDb(): Db {
-	const users: UserRow[] = [];
 	return {
-		async countUsers() {
-			return users.length;
-		},
-		async findUserByEmail(email) {
-			return users.find((u) => u.email === email) ?? null;
-		},
-		async findUserIdByEmail() {
-			return null;
-		},
-		async insertUser({ email, name, role }: { email: string; name: string | null; role: UserRole }) {
-			const row: UserRow = { email, name, role };
-			users.push(row);
-			return row;
-		},
-		async findActiveTokenByHash(): Promise<ActiveTokenRow | null> {
-			return null;
-		},
-		async markTokenUsed() {},
-		async insertApiToken(_input: InsertApiTokenInput) {
-			return { id: 0 };
-		},
-		async revokeApiToken() {},
+		async upsertUser() {},
 		async insertSpendLogs() {},
 		async fetchUsageTotals() {
 			return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
@@ -53,10 +30,15 @@ function makeFakeDb(): Db {
 	};
 }
 
+const stubVerifier: Verifier = {
+	async verifyAccessToken() {
+		throw new AuthError("invalid", "no real tokens are exercised in these tests");
+	},
+};
+
 const deps = {
 	publicUrl: "http://localhost:8080",
-	jwtSecret: "test-secret",
-	oidc: {} as OidcContext,
+	verifier: stubVerifier,
 	db: makeFakeDb(),
 };
 
@@ -100,22 +82,12 @@ describe("createApp", () => {
 		});
 	});
 
-	it("GET /api/me returns 401 when no token", async () => {
+	it("GET /api/me returns 401 'no token' when no Authorization header is sent", async () => {
 		await withRunningApp(async (baseUrl) => {
 			const res = await fetch(`${baseUrl}/api/me`);
 			expect(res.status).toBe(401);
 			const body = (await res.json()) as { error: string };
 			expect(body.error).toBe("no token");
-		});
-	});
-
-	it("POST /auth/logout clears the cookie and returns 204", async () => {
-		await withRunningApp(async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/auth/logout`, { method: "POST" });
-			expect(res.status).toBe(204);
-			const setCookie = res.headers.get("set-cookie") ?? "";
-			expect(setCookie).toMatch(/agent_spend_session=/);
-			expect(setCookie).toMatch(/Max-Age=0/i);
 		});
 	});
 

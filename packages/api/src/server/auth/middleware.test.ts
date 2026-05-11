@@ -1,53 +1,29 @@
 /**
- * Unit tests for requireAuth — exercise both transports against a fake
- * Db. The integration test (oidc.integration.test.ts) covers the bearer
- * path against real Postgres + a real api_tokens row; this file
- * exercises the branches that are awkward with real infrastructure
- * (revoked, expired, bad signature, missing claims, unsigned token).
+ * Unit tests for requireAuth. The token-verification mechanics live in
+ * idp.test.ts; here we use a stub `Verifier` and a recording `Db` to
+ * exercise the middleware's own logic: bearer extraction, role mapping,
+ * the no-role 403, the lazy `users` upsert, and how verifier failures
+ * map to status codes.
  */
 
 import express from "express";
-import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
-import type { ActiveTokenRow, Db, InsertApiTokenInput, UserRole, UserRow } from "../db.js";
+import type { Db, UpsertUserInput } from "../db.js";
+import { AuthError, type VerifiedToken, type Verifier } from "./idp.js";
 import { requireAuth } from "./middleware.js";
-import { sha256Hex } from "./tokens.js";
 
-const SECRET = "test-secret";
-
-interface FakeDb extends Db {
-	tokens: Map<string, ActiveTokenRow>;
-	usedIds: number[];
+interface RecordingDb extends Db {
+	readonly upserted: UpsertUserInput[];
 }
 
-function makeFakeDb(): FakeDb {
-	const tokens = new Map<string, ActiveTokenRow>();
-	const usedIds: number[] = [];
-	const db: FakeDb = {
-		tokens,
-		usedIds,
-		async countUsers() {
-			return 0;
+function makeDb(opts: { failUpsert?: boolean } = {}): RecordingDb {
+	const upserted: UpsertUserInput[] = [];
+	return {
+		upserted,
+		async upsertUser(input) {
+			if (opts.failUpsert) throw new Error("db down");
+			upserted.push(input);
 		},
-		async findUserByEmail() {
-			return null;
-		},
-		async findUserIdByEmail() {
-			return null;
-		},
-		async insertUser(_: { email: string; name: string | null; role: UserRole }): Promise<UserRow> {
-			throw new Error("not used");
-		},
-		async findActiveTokenByHash(hash) {
-			return tokens.get(hash) ?? null;
-		},
-		async markTokenUsed(id) {
-			usedIds.push(id);
-		},
-		async insertApiToken(_input: InsertApiTokenInput) {
-			return { id: 0 };
-		},
-		async revokeApiToken() {},
 		async insertSpendLogs() {},
 		async fetchUsageTotals() {
 			return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
@@ -63,31 +39,38 @@ function makeFakeDb(): FakeDb {
 		},
 		async close() {},
 	};
-	return db;
 }
 
-async function mintJwt(opts: {
-	email: string;
-	role: UserRole;
-	name?: string | null;
-	expSeconds?: number;
-}): Promise<string> {
-	const secret = new TextEncoder().encode(SECRET);
-	const builder = new SignJWT({
-		email: opts.email,
-		name: opts.name ?? null,
-		role: opts.role,
-	})
-		.setProtectedHeader({ alg: "HS256" })
-		.setSubject(opts.email)
-		.setIssuedAt()
-		.setExpirationTime(`${opts.expSeconds ?? 60}s`);
-	return await builder.sign(secret);
+// Sentinel token prefixes → the roles claim the stub verifier reports.
+const ROLES_BY_PREFIX: ReadonlyArray<readonly [string, readonly string[]]> = [
+	["admin", ["TokenTracker.Admin"]],
+	["multi", ["TokenTracker.Viewer", "TokenTracker.Admin"]],
+	["user", ["TokenTracker.User"]],
+	["norole", []],
+	["otherrole", ["SomeOtherApp.Reader"]],
+];
+
+/** Stub verifier: maps a few sentinel token strings to fixed outcomes. */
+function makeVerifier(): Verifier {
+	return {
+		async verifyAccessToken(token: string): Promise<VerifiedToken> {
+			if (token === "throw-unavailable") throw new AuthError("unavailable", "IdP down");
+			if (token === "throw-invalid") throw new AuthError("invalid", "bad token");
+			if (token === "throw-plain") throw new Error("unexpected");
+			const match = ROLES_BY_PREFIX.find(([prefix]) => token.startsWith(prefix));
+			return {
+				email: "alice@example.invalid",
+				name: "Alice",
+				oid: "oid-1",
+				roles: match ? match[1] : ["TokenTracker.User"],
+			};
+		},
+	};
 }
 
 async function withApp<T>(db: Db, fn: (baseUrl: string) => Promise<T>): Promise<T> {
 	const app = express();
-	app.get("/protected", requireAuth({ db, jwtSecret: SECRET }), (req, res) => {
+	app.get("/protected", requireAuth({ verifier: makeVerifier(), db }), (req, res) => {
 		res.json({ identity: req.identity });
 	});
 	const server = app.listen(0);
@@ -100,172 +83,111 @@ async function withApp<T>(db: Db, fn: (baseUrl: string) => Promise<T>): Promise<
 	}
 }
 
-describe("requireAuth — cookie path", () => {
-	it("attaches identity from JWT claims and skips DB lookup", async () => {
-		const db = makeFakeDb();
-		const jwt = await mintJwt({ email: "alice@example.invalid", name: "Alice", role: "admin" });
+describe("requireAuth — happy path", () => {
+	it("attaches identity from the verified token and upserts the user", async () => {
+		const db = makeDb();
 		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { cookie: `agent_spend_session=${jwt}` },
-			});
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer user-token" } });
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { identity: Record<string, unknown> };
 			expect(body.identity).toEqual({
-				userId: null,
 				email: "alice@example.invalid",
 				name: "Alice",
-				role: "admin",
-				tokenLabel: "browser",
-				source: "cookie",
+				oid: "oid-1",
+				roles: ["TokenTracker.User"],
+				role: "user",
 			});
 		});
-		expect(db.usedIds, "cookie path must NOT touch markTokenUsed").toEqual([]);
+		expect(db.upserted).toEqual([{ email: "alice@example.invalid", name: "Alice", oid: "oid-1" }]);
 	});
 
-	it("returns 401 with 'invalid token' when the JWT signature is wrong", async () => {
-		const db = makeFakeDb();
-		const otherSecret = new TextEncoder().encode("other-secret");
-		const jwt = await new SignJWT({ email: "x@example.invalid", role: "developer" })
-			.setProtectedHeader({ alg: "HS256" })
-			.setSubject("x@example.invalid")
-			.setIssuedAt()
-			.setExpirationTime("60s")
-			.sign(otherSecret);
-		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { cookie: `agent_spend_session=${jwt}` },
-			});
-			expect(res.status).toBe(401);
-			expect(((await res.json()) as { error: string }).error).toBe("invalid token");
+	it("maps TokenTracker.Admin → admin", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer admin-token" } });
+			expect(((await res.json()) as { identity: { role: string } }).identity.role).toBe("admin");
 		});
 	});
 
-	it("returns 401 with 'invalid token' for an expired JWT", async () => {
-		const db = makeFakeDb();
-		const secret = new TextEncoder().encode(SECRET);
-		const jwt = await new SignJWT({ email: "x@example.invalid", role: "developer" })
-			.setProtectedHeader({ alg: "HS256" })
-			.setSubject("x")
-			.setIssuedAt(Math.floor(Date.now() / 1000) - 600)
-			.setExpirationTime(Math.floor(Date.now() / 1000) - 60)
-			.sign(secret);
-		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { cookie: `agent_spend_session=${jwt}` },
-			});
-			expect(res.status).toBe(401);
-			expect(((await res.json()) as { error: string }).error).toBe("invalid token");
+	it("picks the highest-privilege role when several are present", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer multi-token" } });
+			expect(((await res.json()) as { identity: { role: string } }).identity.role).toBe("admin");
 		});
 	});
 
-	it("returns 401 with 'invalid token claims' when role is missing or wrong", async () => {
-		const db = makeFakeDb();
-		const secret = new TextEncoder().encode(SECRET);
-		const jwt = await new SignJWT({ email: "x@example.invalid", role: "owner" })
-			.setProtectedHeader({ alg: "HS256" })
-			.setSubject("x")
-			.setIssuedAt()
-			.setExpirationTime("60s")
-			.sign(secret);
+	it("does not fail the request when the users upsert errors", async () => {
+		const db = makeDb({ failUpsert: true });
 		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { cookie: `agent_spend_session=${jwt}` },
-			});
-			expect(res.status).toBe(401);
-			expect(((await res.json()) as { error: string }).error).toBe("invalid token claims");
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer user-token" } });
+			expect(res.status).toBe(200);
+			expect(((await res.json()) as { identity: { email: string } }).identity.email).toBe("alice@example.invalid");
+		});
+		expect(db.upserted).toEqual([]);
+	});
+});
+
+describe("requireAuth — authorization", () => {
+	it("403s a token with no app-role claim", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer norole-token" } });
+			expect(res.status).toBe(403);
+			expect(((await res.json()) as { error: string }).error).toMatch(/no role assignment/i);
+		});
+	});
+
+	it("403s a token whose roles claim has no TokenTracker.* role", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer otherrole-token" } });
+			expect(res.status).toBe(403);
 		});
 	});
 });
 
-describe("requireAuth — bearer path", () => {
-	it("looks up api_tokens by SHA-256 and attaches identity from the row", async () => {
-		const db = makeFakeDb();
-		const jwt = await mintJwt({ email: "alice@example.invalid", name: "Alice", role: "developer" });
-		const hash = sha256Hex(jwt);
-		db.tokens.set(hash, {
-			tokenId: 42,
-			userId: 7,
-			label: "alice-laptop",
-			email: "alice@example.invalid",
-			role: "admin", // role in DB can override claims (admin promoted alice after issuance)
-		});
-		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { authorization: `Bearer ${jwt}` },
-			});
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { identity: Record<string, unknown> };
-			expect(body.identity).toEqual({
-				userId: 7,
-				email: "alice@example.invalid",
-				name: "Alice",
-				role: "admin", // from DB, not from claims
-				tokenLabel: "alice-laptop",
-				source: "bearer",
-			});
-		});
-		// markTokenUsed is fire-and-forget; allow microtask + flush.
-		await new Promise((r) => setImmediate(r));
-		expect(db.usedIds).toEqual([42]);
-	});
-
-	it("returns 401 with 'revoked or expired' when no row matches", async () => {
-		const db = makeFakeDb();
-		const jwt = await mintJwt({ email: "x@example.invalid", role: "developer" });
-		// No db.tokens entry — simulates either revoked, expired, or never-issued.
-		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { authorization: `Bearer ${jwt}` },
-			});
-			expect(res.status).toBe(401);
-			expect(((await res.json()) as { error: string }).error).toBe("revoked or expired");
-		});
-	});
-
-	it("prefers Authorization header over cookie when both are present", async () => {
-		const db = makeFakeDb();
-		const cookieJwt = await mintJwt({ email: "cookie@example.invalid", role: "developer" });
-		const bearerJwt = await mintJwt({ email: "bearer@example.invalid", role: "admin" });
-		db.tokens.set(sha256Hex(bearerJwt), {
-			tokenId: 1,
-			userId: 1,
-			label: "ci",
-			email: "bearer@example.invalid",
-			role: "admin",
-		});
-		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: {
-					authorization: `Bearer ${bearerJwt}`,
-					cookie: `agent_spend_session=${cookieJwt}`,
-				},
-			});
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { identity: { source: string; email: string } };
-			expect(body.identity.source).toBe("bearer");
-			expect(body.identity.email).toBe("bearer@example.invalid");
-		});
-	});
-});
-
-describe("requireAuth — no token", () => {
-	it("returns 401 with 'no token' when neither cookie nor bearer is present", async () => {
-		const db = makeFakeDb();
-		await withApp(db, async (baseUrl) => {
+describe("requireAuth — token presence + verifier failures", () => {
+	it("401 'no token' when there is no Authorization header", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
 			const res = await fetch(`${baseUrl}/protected`);
 			expect(res.status).toBe(401);
 			expect(((await res.json()) as { error: string }).error).toBe("no token");
 		});
 	});
 
-	it("ignores empty Bearer", async () => {
-		const db = makeFakeDb();
-		await withApp(db, async (baseUrl) => {
-			const res = await fetch(`${baseUrl}/protected`, {
-				headers: { authorization: "Bearer " },
-			});
+	it("401 'no token' for an empty Bearer", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer " } });
 			expect(res.status).toBe(401);
 			expect(((await res.json()) as { error: string }).error).toBe("no token");
+		});
+	});
+
+	it("401 'no token' when only a cookie is sent (cookies are not auth anymore)", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { cookie: "session=anything" } });
+			expect(res.status).toBe(401);
+			expect(((await res.json()) as { error: string }).error).toBe("no token");
+		});
+	});
+
+	it("401 'invalid token' when the verifier rejects it as invalid", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer throw-invalid" } });
+			expect(res.status).toBe(401);
+			expect(((await res.json()) as { error: string }).error).toBe("invalid token");
+		});
+	});
+
+	it("401 'invalid token' on an unexpected (non-AuthError) verifier failure", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer throw-plain" } });
+			expect(res.status).toBe(401);
+			expect(((await res.json()) as { error: string }).error).toBe("invalid token");
+		});
+	});
+
+	it("503 when the IdP is unreachable", async () => {
+		await withApp(makeDb(), async (baseUrl) => {
+			const res = await fetch(`${baseUrl}/protected`, { headers: { authorization: "Bearer throw-unavailable" } });
+			expect(res.status).toBe(503);
 		});
 	});
 });

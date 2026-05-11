@@ -1,15 +1,14 @@
 /**
- * `/api/me/*` — own-data endpoints. Phase 0.3.9.
+ * `/api/me/*` — own-data endpoints.
  *
- * Three routes today:
- *   GET /api/me           identity probe (role, email, etc.)
+ *   GET /api/me           identity probe (email, name, role, roles, oid)
  *   GET /api/me/usage     totals + per-day + per-model rollups
  *   GET /api/me/sessions  paginated session list (cursor pagination)
  *
- * All accept either the cookie or `Authorization: Bearer` transports
- * via requireAuth. Authorization is enforced in SQL via rowScope():
- *   - admin   → unrestricted
- *   - developer → own user_id only (= req.identity.email)
+ * All require `Authorization: Bearer <IdP access token>` via requireAuth.
+ * Authorization is enforced in SQL via rowScope():
+ *   - admin           → unrestricted
+ *   - user / viewer   → own user_id only (= req.identity.email)
  *
  * The usage and sessions queries pass the rowScope SQL fragment +
  * params straight into Db; tests assert the right scope fires for
@@ -17,13 +16,14 @@
  */
 
 import express, { type Request, type Response, type Router } from "express";
+import type { Verifier } from "../auth/idp.js";
 import { type Identity, requireAuth } from "../auth/middleware.js";
 import { mergeWhere, rowScope } from "../auth/scope.js";
 import type { Db } from "../db.js";
 
 export interface MeRouteDeps {
 	readonly db: Db;
-	readonly jwtSecret: string;
+	readonly verifier: Verifier;
 }
 
 const DEFAULT_RANGE_DAYS = 7;
@@ -32,7 +32,7 @@ const DEFAULT_LIMIT = 50;
 
 export function meRoutes(deps: MeRouteDeps): Router {
 	const router = express.Router();
-	const auth = requireAuth({ db: deps.db, jwtSecret: deps.jwtSecret });
+	const auth = requireAuth({ verifier: deps.verifier, db: deps.db });
 
 	router.get("/me", auth, (req, res) => {
 		const id = req.identity;
@@ -44,8 +44,8 @@ export function meRoutes(deps: MeRouteDeps): Router {
 			email: id.email,
 			name: id.name,
 			role: id.role,
-			tokenLabel: id.tokenLabel,
-			source: id.source,
+			roles: id.roles,
+			oid: id.oid,
 		});
 	});
 

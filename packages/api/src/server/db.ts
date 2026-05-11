@@ -2,80 +2,35 @@
  * Postgres connection pool, wrapped behind a thin interface (`Db`) so
  * tests can swap in an in-memory fake without touching `pg`.
  *
- * Phase 0.3.3 added the user ops (count/find/insert) for the OIDC
- * bootstrap. Phase 0.3.6 adds the api_tokens ops the requireAuth
- * middleware (bearer path) needs. Schema: see
- * deploy/docker-compose/postgres/init/002_auth.sql.
+ * Since the auth rewrite the server issues nothing, so there is no
+ * `api_tokens` table and no first-user bootstrap. The only thing the
+ * auth path writes is a lazy `users` upsert (email/name/oid +
+ * last_seen_at) on each authenticated request — bookkeeping, not a
+ * foreign-key target. Role is NOT stored; it comes from the token's
+ * `roles` claim every request (token-tracker-redesign-DESIGN.md D7).
+ *
+ * The usage table is still named `agent_spend_logs` here — the rename
+ * to `usage_log` lands with the schema-migration phase.
+ * Schema: see deploy/docker-compose/postgres/init/{001_schema,002_auth}.sql.
  */
 
 import { Pool as PgPool, type Pool } from "pg";
 import type { SpendLogRow } from "./ingest/transform.js";
 
-export type UserRole = "admin" | "developer";
-
-export interface UserRow {
+export interface UpsertUserInput {
 	readonly email: string;
 	readonly name: string | null;
-	readonly role: UserRole;
-}
-
-/**
- * Minimal projection of `api_tokens` rows the auth middleware needs.
- * Joined to `users` so we can attach the user's email + role to the
- * request without a second query.
- */
-export interface ActiveTokenRow {
-	readonly tokenId: number;
-	readonly userId: number;
-	readonly label: string;
-	readonly email: string;
-	readonly role: UserRole;
-}
-
-export interface InsertApiTokenInput {
-	readonly userId: number;
-	readonly label: string;
-	readonly tokenHash: string;
-	readonly expiresAt: Date;
-}
-
-/**
- * Listing projection for /api/me/tokens. The token itself is never
- * returned after issuance — only metadata for revocation UX.
- */
-export interface TokenListRow {
-	readonly id: number;
-	readonly label: string;
-	readonly createdAt: Date;
-	readonly expiresAt: Date;
-	readonly lastUsedAt: Date | null;
+	readonly oid: string | null;
 }
 
 export interface Db {
-	countUsers(): Promise<number>;
-	findUserByEmail(email: string): Promise<UserRow | null>;
-	insertUser(input: { email: string; name: string | null; role: UserRole }): Promise<UserRow>;
 	/**
-	 * Look up a non-revoked, non-expired api_tokens row by its SHA-256
-	 * hash. Joined to `users` so the caller gets identity in one query.
+	 * Lazily record the authenticated user (insert on first sight, refresh
+	 * name/oid + bump last_seen_at otherwise). Keyed by email — the usage
+	 * rows join on email, so email stays the natural key even though we
+	 * also store the IdP `oid` when the token carries one.
 	 */
-	findActiveTokenByHash(tokenHash: string): Promise<ActiveTokenRow | null>;
-	/** Inline `last_used_at = now()` per D14; batching deferred to 0.3.7. */
-	markTokenUsed(tokenId: number): Promise<void>;
-	/** Insert a token row. Used by tests today; by the SPA Install page in 0.3.10. */
-	insertApiToken(input: InsertApiTokenInput): Promise<{ id: number }>;
-	/** Soft-revoke. Used by tests today; by the SPA Settings → Tokens page in 0.3.10. */
-	revokeApiToken(tokenId: number): Promise<void>;
-	/**
-	 * Soft-revoke restricted to a user's own row — returns true if a row
-	 * was updated, false if the (id, user_id) pair didn't match an active
-	 * row. Lets `/api/me/tokens/:id` enforce ownership in one query.
-	 */
-	revokeApiTokenForUser(tokenId: number, userId: number): Promise<boolean>;
-	/** List a user's non-revoked, non-expired tokens, newest first. */
-	listUserTokens(userId: number): Promise<TokenListRow[]>;
-	/** Find a user's numeric id by email. Used by 0.3.10's token issuance. */
-	findUserIdByEmail(email: string): Promise<number | null>;
+	upsertUser(input: UpsertUserInput): Promise<void>;
 	/** Batch INSERT into agent_spend_logs. No-op for an empty array. */
 	insertSpendLogs(rows: readonly SpendLogRow[]): Promise<void>;
 	/**
@@ -89,9 +44,9 @@ export interface Db {
 	/** Per-model rollup; sorted by cost desc. */
 	fetchUsageByModel(where: string, params: readonly unknown[]): Promise<UsageByModel[]>;
 	/**
-	 * Paginated session list. Cursor is `(last_ts, session_id)` per
-	 * design §5.2. Caller passes `cursorTs`/`cursorSessionId` decoded
-	 * from the opaque `?cursor=` query param (or null for the first page).
+	 * Paginated session list. Cursor is `(last_ts, session_id)`. Caller
+	 * passes `cursorLastTs`/`cursorSessionId` decoded from the opaque
+	 * `?cursor=` query param (or null for the first page).
 	 */
 	fetchSessions(input: FetchSessionsInput): Promise<SessionRow[]>;
 	close(): Promise<void>;
@@ -206,129 +161,16 @@ function spendLogValues(row: SpendLogRow): readonly unknown[] {
 export function createDb(databaseUrl: string): Db {
 	const pool: Pool = new PgPool({ connectionString: databaseUrl });
 	return {
-		async countUsers() {
-			const { rows } = await pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM users");
-			return Number.parseInt(rows[0]?.count ?? "0", 10);
-		},
-
-		async findUserByEmail(email: string) {
-			const { rows } = await pool.query<{ email: string; name: string | null; role: UserRole }>(
-				"SELECT email, name, role FROM users WHERE email = $1",
-				[email],
+		async upsertUser({ email, name, oid }) {
+			await pool.query(
+				`INSERT INTO users (email, name, oid, last_seen_at)
+				 VALUES ($1, $2, $3, now())
+				 ON CONFLICT (email) DO UPDATE
+				   SET name         = EXCLUDED.name,
+				       oid          = COALESCE(EXCLUDED.oid, users.oid),
+				       last_seen_at = now()`,
+				[email, name, oid],
 			);
-			const row = rows[0];
-			return row ? { email: row.email, name: row.name, role: row.role } : null;
-		},
-
-		async insertUser({ email, name, role }) {
-			const { rows } = await pool.query<{ email: string; name: string | null; role: UserRole }>(
-				`INSERT INTO users (email, name, role)
-				 VALUES ($1, $2, $3)
-				 RETURNING email, name, role`,
-				[email, name, role],
-			);
-			const row = rows[0];
-			if (!row) throw new Error("INSERT users RETURNING produced no row");
-			return { email: row.email, name: row.name, role: row.role };
-		},
-
-		async findUserIdByEmail(email: string) {
-			const { rows } = await pool.query<{ id: string }>("SELECT id::text AS id FROM users WHERE email = $1", [
-				email,
-			]);
-			const row = rows[0];
-			return row ? Number.parseInt(row.id, 10) : null;
-		},
-
-		async findActiveTokenByHash(tokenHash: string) {
-			// Partial unique index on api_tokens(token_hash) WHERE revoked_at IS NULL
-			// (D14) makes this an index-only seek for the live-token case.
-			const { rows } = await pool.query<{
-				token_id: string;
-				user_id: string;
-				label: string;
-				email: string;
-				role: UserRole;
-			}>(
-				`SELECT t.id::text   AS token_id,
-				        t.user_id::text AS user_id,
-				        t.label,
-				        u.email,
-				        u.role
-				   FROM api_tokens t
-				   JOIN users u ON u.id = t.user_id
-				  WHERE t.token_hash = $1
-				    AND t.revoked_at IS NULL
-				    AND t.expires_at > now()`,
-				[tokenHash],
-			);
-			const row = rows[0];
-			if (!row) return null;
-			return {
-				tokenId: Number.parseInt(row.token_id, 10),
-				userId: Number.parseInt(row.user_id, 10),
-				label: row.label,
-				email: row.email,
-				role: row.role,
-			};
-		},
-
-		async markTokenUsed(tokenId: number) {
-			await pool.query("UPDATE api_tokens SET last_used_at = now() WHERE id = $1", [tokenId]);
-		},
-
-		async insertApiToken({ userId, label, tokenHash, expiresAt }) {
-			const { rows } = await pool.query<{ id: string }>(
-				`INSERT INTO api_tokens (user_id, label, token_hash, expires_at)
-				 VALUES ($1, $2, $3, $4)
-				 RETURNING id::text AS id`,
-				[userId, label, tokenHash, expiresAt],
-			);
-			const row = rows[0];
-			if (!row) throw new Error("INSERT api_tokens RETURNING produced no row");
-			return { id: Number.parseInt(row.id, 10) };
-		},
-
-		async revokeApiToken(tokenId: number) {
-			await pool.query("UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [tokenId]);
-		},
-
-		async revokeApiTokenForUser(tokenId: number, userId: number) {
-			const { rowCount } = await pool.query(
-				`UPDATE api_tokens SET revoked_at = now()
-				  WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
-				[tokenId, userId],
-			);
-			return (rowCount ?? 0) > 0;
-		},
-
-		async listUserTokens(userId: number) {
-			const { rows } = await pool.query<{
-				id: string;
-				label: string;
-				created_at: Date;
-				expires_at: Date;
-				last_used_at: Date | null;
-			}>(
-				`SELECT id::text       AS id,
-				        label,
-				        created_at,
-				        expires_at,
-				        last_used_at
-				   FROM api_tokens
-				  WHERE user_id = $1
-				    AND revoked_at IS NULL
-				    AND expires_at > now()
-				  ORDER BY created_at DESC, id DESC`,
-				[userId],
-			);
-			return rows.map((r) => ({
-				id: Number.parseInt(r.id, 10),
-				label: r.label,
-				createdAt: r.created_at,
-				expiresAt: r.expires_at,
-				lastUsedAt: r.last_used_at,
-			}));
 		},
 
 		async fetchUsageTotals(where, params) {

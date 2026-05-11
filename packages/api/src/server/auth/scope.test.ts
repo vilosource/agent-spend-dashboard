@@ -2,22 +2,20 @@ import { describe, expect, it } from "vitest";
 import type { Identity } from "./middleware.js";
 import { mergeWhere, rowScope } from "./scope.js";
 
-const developer: Identity = {
-	userId: 1,
+const user: Identity = {
 	email: "alice@example.invalid",
 	name: "Alice",
-	role: "developer",
-	tokenLabel: "browser",
-	source: "cookie",
+	oid: "oid-1",
+	roles: ["TokenTracker.User"],
+	role: "user",
 };
 
 const admin: Identity = {
-	userId: 2,
 	email: "admin@example.invalid",
 	name: "Admin",
+	oid: "oid-2",
+	roles: ["TokenTracker.Admin"],
 	role: "admin",
-	tokenLabel: "browser",
-	source: "cookie",
 };
 
 describe("rowScope", () => {
@@ -25,19 +23,24 @@ describe("rowScope", () => {
 		expect(rowScope(admin)).toEqual({ sql: "TRUE", params: [] });
 	});
 
-	it("developer → user_id = $1 / [email]", () => {
-		expect(rowScope(developer)).toEqual({ sql: "user_id = $1", params: ["alice@example.invalid"] });
+	it("user → user_id = $1 / [email]", () => {
+		expect(rowScope(user)).toEqual({ sql: "user_id = $1", params: ["alice@example.invalid"] });
 	});
 
-	it("unknown role falls back to developer (defensive)", () => {
-		const weird = { ...developer, role: "guest" as unknown as "developer" };
+	it("viewer → own rows only, same as user", () => {
+		const viewer: Identity = { ...user, role: "viewer", roles: ["TokenTracker.Viewer"] };
+		expect(rowScope(viewer)).toEqual({ sql: "user_id = $1", params: ["alice@example.invalid"] });
+	});
+
+	it("unknown role falls back to own rows (defensive)", () => {
+		const weird = { ...user, role: "guest" as unknown as Identity["role"] };
 		expect(rowScope(weird)).toEqual({ sql: "user_id = $1", params: ["alice@example.invalid"] });
 	});
 });
 
 describe("mergeWhere", () => {
 	it("shifts bind-param numbers past the scope params", () => {
-		const scope = rowScope(developer);
+		const scope = rowScope(user);
 		const merged = mergeWhere(scope, "ts BETWEEN $1 AND $2", ["from", "to"]);
 		expect(merged.sql).toBe("user_id = $1 AND ts BETWEEN $2 AND $3");
 		expect(merged.params).toEqual(["alice@example.invalid", "from", "to"]);
@@ -51,7 +54,7 @@ describe("mergeWhere", () => {
 	});
 
 	it("handles multi-digit param numbers correctly", () => {
-		const scope = rowScope(developer);
+		const scope = rowScope(user);
 		const merged = mergeWhere(scope, "$1 AND $2 AND $10 AND $11", [1, 2, "...", 10, 11]);
 		// $1 → $2, $2 → $3, $10 → $11, $11 → $12
 		expect(merged.sql).toBe("user_id = $1 AND $2 AND $3 AND $11 AND $12");

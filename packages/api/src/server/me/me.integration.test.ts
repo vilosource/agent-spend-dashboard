@@ -1,27 +1,28 @@
 /**
  * End-to-end tests for `/api/me/*`. Spins up Postgres via testcontainers
- * (no Dex needed — we mint JWTs locally and use either cookie or
- * bearer transport), seeds known rows for two developers + an admin,
- * then asserts the rowScope() boundary fires correctly:
- *   - developer cookie/bearer → only own rows
- *   - admin cookie/bearer     → all rows
+ * plus a throwaway local "IdP" (an HTTP server serving an OIDC discovery
+ * doc + a JWKs set; tokens are RS256-signed with a local keypair). Seeds
+ * a known dataset for two regular users + an admin, then asserts the
+ * rowScope() boundary fires correctly:
+ *   - user  → only own rows
+ *   - admin → all rows
  *
- * Also exercises ?from / ?to range filtering and cursor pagination.
+ * Also exercises ?from / ?to range filtering, cursor pagination, the
+ * no-role 403, and the no-token 401.
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SignJWT } from "jose";
+import { exportJWK, generateKeyPair, type JWK, type KeyLike, SignJWT } from "jose";
 import { Pool } from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
-import type { OidcContext } from "../auth/oidc.js";
-import { sha256Hex } from "../auth/tokens.js";
+import { createVerifier } from "../auth/idp.js";
 import { createDb, type Db } from "../db.js";
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "../../../../..");
@@ -31,23 +32,31 @@ const SCHEMA_FILES = [
 ];
 const PG_IMAGE = "postgres:16-alpine";
 const TEST_TIMEOUT = 60_000;
-const JWT_SECRET = "test-secret";
+const CLIENT_ID = "token-tracker-api";
+const KID = "test-key-1";
 
 const ALICE = "alice@example.invalid";
 const BOB = "bob@example.invalid";
 const ADMIN = "admin@example.invalid";
 
+interface Idp {
+	issuer: string;
+	server: Server;
+	privateKey: KeyLike;
+}
+
 interface Env {
 	pg: StartedTestContainer;
 	db: Db;
 	server: Server;
+	idp: Idp;
 	baseUrl: string;
 	tempDir: string;
 	databaseUrl: string;
-	aliceCookie: string;
-	bobCookie: string;
-	adminCookie: string;
-	aliceBearerJwt: string;
+	aliceToken: string;
+	bobToken: string;
+	adminToken: string;
+	noRoleToken: string;
 }
 
 let env: Env | undefined;
@@ -61,32 +70,30 @@ afterAll(async () => {
 }, TEST_TIMEOUT);
 
 describe("GET /api/me", () => {
-	it("returns the authenticated identity from the cookie", async () => {
+	it("returns the authenticated identity", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me`, { headers: { cookie: env.aliceCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me`, { headers: { authorization: `Bearer ${env.aliceToken}` } });
 		expect(r.status).toBe(200);
-		expect(await r.json()).toMatchObject({
-			email: ALICE,
-			role: "developer",
-			source: "cookie",
-			tokenLabel: "browser",
-		});
+		expect(await r.json()).toMatchObject({ email: ALICE, role: "user", roles: ["TokenTracker.User"] });
 	});
 
-	it("works with the bearer transport too", async () => {
+	it("403s a token with no app-role claim", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me`, {
-			headers: { authorization: `Bearer ${env.aliceBearerJwt}` },
-		});
-		expect(r.status).toBe(200);
-		expect(await r.json()).toMatchObject({ email: ALICE, source: "bearer" });
+		const r = await fetch(`${env.baseUrl}/api/me`, { headers: { authorization: `Bearer ${env.noRoleToken}` } });
+		expect(r.status).toBe(403);
+	});
+
+	it("401s without a token", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me`);
+		expect(r.status).toBe(401);
 	});
 });
 
 describe("GET /api/me/usage — rowScope enforcement", () => {
-	it("developer sees only their own rows", async () => {
+	it("a regular user sees only their own rows", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { cookie: env.aliceCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { authorization: `Bearer ${env.aliceToken}` } });
 		expect(r.status).toBe(200);
 		const body = (await r.json()) as { totals: { turns: number; costUsd: number } };
 		// Alice has 5 rows seeded; Bob has 7; total dataset is 5+7+3=15.
@@ -96,7 +103,7 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 
 	it("admin sees all rows", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { cookie: env.adminCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { authorization: `Bearer ${env.adminToken}` } });
 		expect(r.status).toBe(200);
 		const body = (await r.json()) as { totals: { turns: number } };
 		expect(body.totals.turns).toBe(15);
@@ -104,7 +111,7 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 
 	it("byDay rollup is sorted ascending and matches totals", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { cookie: env.aliceCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { authorization: `Bearer ${env.aliceToken}` } });
 		const body = (await r.json()) as { totals: { turns: number }; byDay: { day: string; turns: number }[] };
 		const sumByDay = body.byDay.reduce((s, d) => s + d.turns, 0);
 		expect(sumByDay).toBe(body.totals.turns);
@@ -114,7 +121,7 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 
 	it("byModel returns one entry per model, sorted by cost desc", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { cookie: env.aliceCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { authorization: `Bearer ${env.aliceToken}` } });
 		const body = (await r.json()) as { byModel: { model: string; costUsd: number }[] };
 		expect(body.byModel.length).toBeGreaterThan(0);
 		for (let i = 1; i < body.byModel.length; i += 1) {
@@ -131,7 +138,7 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 		const futureFrom = "2099-01-01T00:00:00Z";
 		const futureTo = "2099-12-31T23:59:59Z";
 		const r = await fetch(`${env.baseUrl}/api/me/usage?from=${futureFrom}&to=${futureTo}`, {
-			headers: { cookie: env.aliceCookie },
+			headers: { authorization: `Bearer ${env.aliceToken}` },
 		});
 		expect(r.status).toBe(200);
 		const body = (await r.json()) as { totals: { turns: number; costUsd: number } };
@@ -142,7 +149,7 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 	it("rejects malformed ?from", async () => {
 		if (!env) throw new Error("env failed");
 		const r = await fetch(`${env.baseUrl}/api/me/usage?from=not-a-date`, {
-			headers: { cookie: env.aliceCookie },
+			headers: { authorization: `Bearer ${env.aliceToken}` },
 		});
 		expect(r.status).toBe(400);
 	});
@@ -155,9 +162,11 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 });
 
 describe("GET /api/me/sessions — pagination + scoping", () => {
-	it("developer sees only their own sessions", async () => {
+	it("a regular user sees only their own sessions", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/sessions`, { headers: { cookie: env.aliceCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/sessions`, {
+			headers: { authorization: `Bearer ${env.aliceToken}` },
+		});
 		expect(r.status).toBe(200);
 		const body = (await r.json()) as { items: { sessionId: string }[] };
 		// Alice has 2 distinct sessions across her 5 rows.
@@ -166,7 +175,9 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 
 	it("admin sees all sessions across users", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/sessions`, { headers: { cookie: env.adminCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/sessions`, {
+			headers: { authorization: `Bearer ${env.adminToken}` },
+		});
 		const body = (await r.json()) as { items: { sessionId: string }[] };
 		// 2 (alice) + 2 (bob) + 1 (admin) = 5 distinct sessions.
 		expect(body.items).toHaveLength(5);
@@ -174,7 +185,9 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 
 	it("returns nextCursor when there are more rows than ?limit", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/sessions?limit=2`, { headers: { cookie: env.adminCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/sessions?limit=2`, {
+			headers: { authorization: `Bearer ${env.adminToken}` },
+		});
 		const body = (await r.json()) as { items: unknown[]; nextCursor: string | null };
 		expect(body.items).toHaveLength(2);
 		expect(body.nextCursor).not.toBeNull();
@@ -182,13 +195,14 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 
 	it("paginates exhaustively without duplicates", async () => {
 		if (!env) throw new Error("env failed");
+		const e = env;
 		const seen = new Set<string>();
 		let cursor: string | null = null;
 		for (let i = 0; i < 10; i += 1) {
 			const url: string = cursor
-				? `${env.baseUrl}/api/me/sessions?limit=2&cursor=${encodeURIComponent(cursor)}`
-				: `${env.baseUrl}/api/me/sessions?limit=2`;
-			const r = await fetch(url, { headers: { cookie: env.adminCookie } });
+				? `${e.baseUrl}/api/me/sessions?limit=2&cursor=${encodeURIComponent(cursor)}`
+				: `${e.baseUrl}/api/me/sessions?limit=2`;
+			const r = await fetch(url, { headers: { authorization: `Bearer ${e.adminToken}` } });
 			const body = (await r.json()) as { items: { sessionId: string }[]; nextCursor: string | null };
 			for (const item of body.items) {
 				expect(seen.has(item.sessionId), `duplicate session ${item.sessionId} on page ${i}`).toBe(false);
@@ -202,7 +216,9 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 
 	it("session items include first/last ts, cost, turns, models", async () => {
 		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/sessions`, { headers: { cookie: env.aliceCookie } });
+		const r = await fetch(`${env.baseUrl}/api/me/sessions`, {
+			headers: { authorization: `Bearer ${env.aliceToken}` },
+		});
 		const body = (await r.json()) as {
 			items: {
 				sessionId: string;
@@ -225,144 +241,18 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 	it("rejects malformed cursor", async () => {
 		if (!env) throw new Error("env failed");
 		const r = await fetch(`${env.baseUrl}/api/me/sessions?cursor=not-base64`, {
-			headers: { cookie: env.aliceCookie },
+			headers: { authorization: `Bearer ${env.aliceToken}` },
 		});
 		expect([200, 400]).toContain(r.status); // not-base64 may parse to empty bytes; either accept or reject deterministically
 	});
 });
 
-describe("/api/me/tokens — phase 0.3.10", () => {
-	it("GET returns the seeded bearer token row for alice", async () => {
-		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/tokens`, { headers: { cookie: env.aliceCookie } });
-		expect(r.status).toBe(200);
-		const body = (await r.json()) as { items: { label: string; id: number }[] };
-		expect(body.items.some((t) => t.label === "test-machine")).toBe(true);
-	});
-
-	it("GET requires auth", async () => {
-		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/tokens`);
-		expect(r.status).toBe(401);
-	});
-
-	it("GET scopes to the caller — bob does not see alice's tokens", async () => {
-		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/tokens`, { headers: { cookie: env.bobCookie } });
-		const body = (await r.json()) as { items: { label: string }[] };
-		expect(body.items.find((t) => t.label === "test-machine")).toBeUndefined();
-	});
-
-	it("POST mints a working bearer token", async () => {
-		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/tokens`, {
-			method: "POST",
-			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
-			body: JSON.stringify({ label: "spec-laptop" }),
-		});
-		expect(r.status).toBe(201);
-		const body = (await r.json()) as { id: number; label: string; token: string; expiresAt: string };
-		expect(body.label).toBe("spec-laptop");
-		expect(typeof body.token).toBe("string");
-		expect(body.token.split(".").length).toBe(3); // jwt shape
-		// Round-trip: the minted token authenticates.
-		const me = await fetch(`${env.baseUrl}/api/me`, {
-			headers: { authorization: `Bearer ${body.token}` },
-		});
-		expect(me.status).toBe(200);
-		expect(await me.json()).toMatchObject({ email: ALICE, source: "bearer", tokenLabel: "spec-laptop" });
-	});
-
-	it("POST rejects invalid label", async () => {
-		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/tokens`, {
-			method: "POST",
-			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
-			body: JSON.stringify({ label: "spaces not allowed" }),
-		});
-		expect(r.status).toBe(400);
-	});
-
-	it("POST returns 409 on duplicate active label", async () => {
-		if (!env) throw new Error("env failed");
-		// Mint once.
-		const first = await fetch(`${env.baseUrl}/api/me/tokens`, {
-			method: "POST",
-			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
-			body: JSON.stringify({ label: "duplicate-label-test" }),
-		});
-		expect(first.status).toBe(201);
-		// Second mint with same label — partial unique index fires.
-		const second = await fetch(`${env.baseUrl}/api/me/tokens`, {
-			method: "POST",
-			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
-			body: JSON.stringify({ label: "duplicate-label-test" }),
-		});
-		expect(second.status).toBe(409);
-	});
-
-	it("DELETE revokes the caller's own token; the token stops authenticating", async () => {
-		if (!env) throw new Error("env failed");
-		const minted = await fetch(`${env.baseUrl}/api/me/tokens`, {
-			method: "POST",
-			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
-			body: JSON.stringify({ label: "to-be-revoked" }),
-		});
-		const { id, token } = (await minted.json()) as { id: number; token: string };
-
-		// Token works pre-revoke.
-		const before = await fetch(`${env.baseUrl}/api/me`, { headers: { authorization: `Bearer ${token}` } });
-		expect(before.status).toBe(200);
-
-		const del = await fetch(`${env.baseUrl}/api/me/tokens/${id}`, {
-			method: "DELETE",
-			headers: { cookie: env.aliceCookie },
-		});
-		expect(del.status).toBe(204);
-
-		// Token rejects post-revoke (revoked_at IS NULL clause filters).
-		const after = await fetch(`${env.baseUrl}/api/me`, { headers: { authorization: `Bearer ${token}` } });
-		expect(after.status).toBe(401);
-	});
-
-	it("DELETE 404s on someone else's token id", async () => {
-		if (!env) throw new Error("env failed");
-		// Mint as alice, attempt to revoke as bob.
-		const minted = await fetch(`${env.baseUrl}/api/me/tokens`, {
-			method: "POST",
-			headers: { cookie: env.aliceCookie, "content-type": "application/json" },
-			body: JSON.stringify({ label: "alice-only-token" }),
-		});
-		const { id } = (await minted.json()) as { id: number };
-
-		const del = await fetch(`${env.baseUrl}/api/me/tokens/${id}`, {
-			method: "DELETE",
-			headers: { cookie: env.bobCookie },
-		});
-		expect(del.status).toBe(404);
-
-		// Confirm it's still active for alice.
-		const list = await fetch(`${env.baseUrl}/api/me/tokens`, { headers: { cookie: env.aliceCookie } });
-		const body = (await list.json()) as { items: { label: string }[] };
-		expect(body.items.find((t) => t.label === "alice-only-token")).toBeDefined();
-	});
-
-	it("DELETE 400s on a non-numeric id", async () => {
-		if (!env) throw new Error("env failed");
-		const r = await fetch(`${env.baseUrl}/api/me/tokens/abc`, {
-			method: "DELETE",
-			headers: { cookie: env.aliceCookie },
-		});
-		expect(r.status).toBe(400);
-	});
-});
-
 // ---------------------------------------------------------------------------
-// env setup + seed helpers
+// env setup + IdP fixture + seed helpers
 // ---------------------------------------------------------------------------
 
 async function setupEnv(): Promise<Env> {
-	const tempDir = await mkdtemp(join(tmpdir(), "agent-spend-me-"));
+	const tempDir = await mkdtemp(join(tmpdir(), "token-tracker-me-"));
 
 	const pg = await new GenericContainer(PG_IMAGE)
 		.withEnvironment({ POSTGRES_USER: "test", POSTGRES_PASSWORD: "test", POSTGRES_DB: "test" })
@@ -382,40 +272,15 @@ async function setupEnv(): Promise<Env> {
 	dbUrl.password = "test";
 	const databaseUrl = dbUrl.toString();
 
+	const idp = await startIdp();
+	const verifier = createVerifier({ issuerUrl: idp.issuer, clientId: CLIENT_ID });
+
 	const apiPort = await freePort();
 	const baseUrl = `http://localhost:${apiPort}`;
 	const db = createDb(databaseUrl);
-
-	// Seed: three users in `users`, plus a known dataset in agent_spend_logs.
-	await db.insertUser({ email: ALICE, name: "Alice", role: "developer" });
-	await db.insertUser({ email: BOB, name: "Bob", role: "developer" });
-	await db.insertUser({ email: ADMIN, name: "Admin", role: "admin" });
 	await seedSpendLogs(databaseUrl);
 
-	// Mint the cookies (HS256 JWT signed with JWT_SECRET; same shape the
-	// auth/session.ts issuer produces in production).
-	const aliceCookie = `agent_spend_session=${await mintSessionJwt(ALICE, "developer")}`;
-	const bobCookie = `agent_spend_session=${await mintSessionJwt(BOB, "developer")}`;
-	const adminCookie = `agent_spend_session=${await mintSessionJwt(ADMIN, "admin")}`;
-
-	// One bearer JWT for the bearer-transport assertion. Insert the row
-	// so it's a real, non-revoked token.
-	const aliceBearerJwt = await mintSessionJwt(ALICE, "developer", "90d");
-	const aliceUserId = await db.findUserIdByEmail(ALICE);
-	if (!aliceUserId) throw new Error("alice missing");
-	await db.insertApiToken({
-		userId: aliceUserId,
-		label: "test-machine",
-		tokenHash: sha256Hex(aliceBearerJwt),
-		expiresAt: new Date(Date.now() + 90 * 86_400_000),
-	});
-
-	const app = createApp({
-		publicUrl: baseUrl,
-		jwtSecret: JWT_SECRET,
-		oidc: {} as OidcContext,
-		db,
-	});
+	const app = createApp({ publicUrl: baseUrl, verifier, db });
 	const server: Server = await new Promise((resolve) => {
 		const s = app.listen(apiPort, () => resolve(s));
 	});
@@ -424,31 +289,64 @@ async function setupEnv(): Promise<Env> {
 		pg,
 		db,
 		server,
+		idp,
 		baseUrl,
 		tempDir,
 		databaseUrl,
-		aliceCookie,
-		bobCookie,
-		adminCookie,
-		aliceBearerJwt,
+		aliceToken: await mintToken(idp, ALICE, "Alice", ["TokenTracker.User"]),
+		bobToken: await mintToken(idp, BOB, "Bob", ["TokenTracker.User"]),
+		adminToken: await mintToken(idp, ADMIN, "Admin", ["TokenTracker.Admin"]),
+		noRoleToken: await mintToken(idp, "norole@example.invalid", "No Role", []),
 	};
 }
 
 async function teardownEnv(e: Env): Promise<void> {
 	await new Promise<void>((resolve) => e.server.close(() => resolve()));
+	await new Promise<void>((resolve) => e.idp.server.close(() => resolve()));
 	await e.db.close();
 	await e.pg.stop({ timeout: 5000 });
 	await rm(e.tempDir, { recursive: true, force: true });
 }
 
-async function mintSessionJwt(email: string, role: "admin" | "developer", exp = "60s"): Promise<string> {
-	const secret = new TextEncoder().encode(JWT_SECRET);
-	return await new SignJWT({ email, name: email.split("@")[0], role })
-		.setProtectedHeader({ alg: "HS256" })
+async function startIdp(): Promise<Idp> {
+	const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
+	const publicJwk: JWK = await exportJWK(publicKey);
+	publicJwk.kid = KID;
+	publicJwk.alg = "RS256";
+	publicJwk.use = "sig";
+
+	const server = createServer((req, res) => {
+		const url = req.url ?? "/";
+		if (url.startsWith("/.well-known/openid-configuration")) {
+			const issuer = `http://127.0.0.1:${addr().port}`;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ issuer, jwks_uri: `${issuer}/jwks`, token_endpoint: `${issuer}/token` }));
+			return;
+		}
+		if (url.startsWith("/jwks")) {
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ keys: [publicJwk] }));
+			return;
+		}
+		res.statusCode = 404;
+		res.end("not found");
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+	function addr(): net.AddressInfo {
+		return server.address() as net.AddressInfo;
+	}
+	return { issuer: `http://127.0.0.1:${addr().port}`, server, privateKey };
+}
+
+async function mintToken(idp: Idp, email: string, name: string, roles: readonly string[]): Promise<string> {
+	return await new SignJWT({ preferred_username: email, name, oid: `oid-${email}`, roles: [...roles] })
+		.setProtectedHeader({ alg: "RS256", kid: KID })
+		.setIssuer(idp.issuer)
+		.setAudience(CLIENT_ID)
 		.setSubject(email)
 		.setIssuedAt()
-		.setExpirationTime(exp)
-		.sign(secret);
+		.setExpirationTime("10m")
+		.sign(idp.privateKey);
 }
 
 /**

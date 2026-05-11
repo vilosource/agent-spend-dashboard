@@ -1,34 +1,40 @@
 /**
- * `requireAuth` middleware — phase 0.3.6.
+ * `requireAuth` middleware.
  *
- * Both transports (browser cookie, extension `Authorization: Bearer`)
- * carry the same JWT format. The middleware validates the signature
- * once, then takes one of two paths based on transport:
+ * Every protected route (`/api/*`, `/v1/traces`) goes through here. The
+ * server is a pure resource server (token-tracker-redesign-DESIGN.md §4.1):
+ * one code path, `Authorization: Bearer <access_token>`, verified against the
+ * IdP's JWKs. There is no cookie transport, no server-issued token, no
+ * `api_tokens` table — the legacy split-on-transport design and its
+ * shared-secret machinery are gone.
  *
- *   • cookie  → stateless. Identity from claims. No DB lookup. (D14)
- *   • bearer  → DB-backed. SHA-256(token) → api_tokens row lookup.
- *               Reject if revoked or expired. Update last_used_at
- *               inline. Identity comes from the row + claims.
- *
- * Downstream handlers see one shape on `req.identity` regardless of
- * how the user authenticated.
+ * Flow:
+ *   1. extract the bearer token (401 "no token" if absent)
+ *   2. verify it via the IdP verifier (401 "invalid token", or 503 if the IdP
+ *      itself is unreachable)
+ *   3. map the `roles` claim to an internal role; no role → 403 with a clear
+ *      "ask an admin to add you" message (D7 — role lives in the token, not
+ *      the DB; group-membership changes propagate on next token refresh)
+ *   4. lazily upsert the `users` row (email/name/oid + last_seen_at); a write
+ *      failure is logged, not fatal — the `users` row is bookkeeping, not a
+ *      foreign-key target
+ *   5. attach `req.identity` and continue
  */
 
-import { parse as parseCookie } from "cookie";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { jwtVerify } from "jose";
-import type { Db, UserRole } from "../db.js";
-import { sha256Hex } from "./tokens.js";
+import type { Db } from "../db.js";
+import { AuthError, type Verifier } from "./idp.js";
 
-export type AuthSource = "cookie" | "bearer";
+export type Role = "admin" | "user" | "viewer";
 
 export interface Identity {
-	readonly userId: number | null; // null for cookie path until we wire user_id into the JWT (0.3.6 keeps email-as-identity)
 	readonly email: string;
 	readonly name: string | null;
-	readonly role: UserRole;
-	readonly tokenLabel: string; // "browser" for cookie path, the row's label for bearer
-	readonly source: AuthSource;
+	readonly oid: string | null;
+	/** Raw app-role claims from the token, for diagnostics / future fine-grained checks. */
+	readonly roles: readonly string[];
+	/** The mapped internal role (highest privilege wins if several are present). */
+	readonly role: Role;
 }
 
 declare module "express-serve-static-core" {
@@ -37,93 +43,74 @@ declare module "express-serve-static-core" {
 	}
 }
 
-const SESSION_COOKIE = "agent_spend_session";
+const NO_ROLE_MESSAGE =
+	"your account has no role assignment for this app — ask an admin to add you to the token-tracker users group";
 
 export interface RequireAuthDeps {
+	readonly verifier: Verifier;
 	readonly db: Db;
-	readonly jwtSecret: string;
 }
 
 export function requireAuth(deps: RequireAuthDeps): RequestHandler {
-	const secret = new TextEncoder().encode(deps.jwtSecret);
-
 	return async (req: Request, res: Response, next: NextFunction) => {
-		const transport = bearerOrCookie(req);
-		if (!transport) return reject(res, 401, "no token");
-
-		const verified = await verifyAndExtract(transport.token, secret);
-		if (verified.kind === "invalid-signature") return reject(res, 401, "invalid token");
-		if (verified.kind === "invalid-claims") return reject(res, 401, "invalid token claims");
-
-		if (transport.source === "cookie") {
-			req.identity = { userId: null, ...verified.claims, tokenLabel: "browser", source: "cookie" };
-			return next();
+		const token = bearerToken(req);
+		if (!token) {
+			reject(res, 401, "no token");
+			return;
 		}
 
-		const row = await deps.db.findActiveTokenByHash(sha256Hex(transport.token));
-		if (!row) return reject(res, 401, "revoked or expired");
+		let verified: Awaited<ReturnType<Verifier["verifyAccessToken"]>>;
+		try {
+			verified = await deps.verifier.verifyAccessToken(token);
+		} catch (err: unknown) {
+			if (err instanceof AuthError && err.kind === "unavailable") {
+				reject(res, 503, "authentication temporarily unavailable");
+				return;
+			}
+			reject(res, 401, "invalid token");
+			return;
+		}
 
-		// Inline UPDATE per D14; batching deferred to 0.3.7. Fire-and-forget
-		// off the critical path; log on failure.
-		void deps.db.markTokenUsed(row.tokenId).catch((err) => {
-			console.error("markTokenUsed failed:", err);
-		});
+		const role = mapRole(verified.roles);
+		if (!role) {
+			reject(res, 403, NO_ROLE_MESSAGE);
+			return;
+		}
+
+		try {
+			await deps.db.upsertUser({ email: verified.email, name: verified.name, oid: verified.oid });
+		} catch (err) {
+			// Bookkeeping only — don't fail the request over it.
+			console.error("upsertUser failed:", err);
+		}
 
 		req.identity = {
-			userId: row.userId,
-			email: row.email,
-			name: verified.claims.name,
-			role: row.role,
-			tokenLabel: row.label,
-			source: "bearer",
+			email: verified.email,
+			name: verified.name,
+			oid: verified.oid,
+			roles: verified.roles,
+			role,
 		};
 		next();
 	};
 }
 
-type VerifyResult =
-	| { kind: "ok"; claims: { email: string; name: string | null; role: UserRole } }
-	| { kind: "invalid-signature" }
-	| { kind: "invalid-claims" };
+function mapRole(roles: readonly string[]): Role | null {
+	if (roles.includes("TokenTracker.Admin")) return "admin";
+	if (roles.includes("TokenTracker.User")) return "user";
+	if (roles.includes("TokenTracker.Viewer")) return "viewer";
+	return null;
+}
 
-async function verifyAndExtract(token: string, secret: Uint8Array): Promise<VerifyResult> {
-	let payload: Awaited<ReturnType<typeof jwtVerify>>["payload"];
-	try {
-		({ payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] }));
-	} catch {
-		return { kind: "invalid-signature" };
+function bearerToken(req: Request): string | null {
+	const header = req.headers.authorization;
+	if (typeof header === "string" && header.startsWith("Bearer ")) {
+		const token = header.slice("Bearer ".length).trim();
+		if (token.length > 0) return token;
 	}
-	const email = typeof payload["email"] === "string" ? payload["email"] : null;
-	const name = typeof payload["name"] === "string" ? payload["name"] : null;
-	const role = payload["role"];
-	if (!email || (role !== "admin" && role !== "developer")) {
-		return { kind: "invalid-claims" };
-	}
-	return { kind: "ok", claims: { email, name, role } };
+	return null;
 }
 
 function reject(res: Response, status: number, error: string): void {
 	res.status(status).json({ error });
-}
-
-interface ExtractedToken {
-	readonly token: string;
-	readonly source: AuthSource;
-}
-
-export function bearerOrCookie(req: Request): ExtractedToken | null {
-	const authHeader = req.headers.authorization;
-	if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
-		const token = authHeader.slice("Bearer ".length).trim();
-		if (token.length > 0) return { token, source: "bearer" };
-	}
-
-	const cookieHeader = req.headers.cookie;
-	if (typeof cookieHeader === "string" && cookieHeader.length > 0) {
-		const parsed = parseCookie(cookieHeader);
-		const value = parsed[SESSION_COOKIE];
-		if (typeof value === "string" && value.length > 0) return { token: value, source: "cookie" };
-	}
-
-	return null;
 }

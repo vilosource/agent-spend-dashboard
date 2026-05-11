@@ -1,27 +1,24 @@
 /**
  * End-to-end test for the OTLP `/v1/traces` ingest path. Spins up a
- * real Postgres via testcontainers (with the init/*.sql schema applied),
- * issues a real api_tokens row, sends a real OTLP/JSON payload via the
- * Express app, and asserts the rows that landed in agent_spend_logs.
- *
- * Dex is not needed here — `/v1/traces` is bearer-only, and the bearer
- * is whatever JWT we mint + insert into api_tokens. That keeps this
- * test fast (~2s) and focused on the ingest contract.
+ * real Postgres via testcontainers (with the init/*.sql schema applied)
+ * plus a throwaway local "IdP" (HTTP discovery doc + JWKs; RS256 tokens
+ * signed with a local keypair). Sends a real OTLP/JSON payload and
+ * asserts the rows that landed — including that `agent.user.id` on the
+ * span is ignored and the verified token's email wins.
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SignJWT } from "jose";
+import { exportJWK, generateKeyPair, type JWK, type KeyLike, SignJWT } from "jose";
 import { Pool } from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
-import type { OidcContext } from "../auth/oidc.js";
-import { sha256Hex } from "../auth/tokens.js";
+import { createVerifier } from "../auth/idp.js";
 import { createDb, type Db } from "../db.js";
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "../../../../..");
@@ -32,16 +29,24 @@ const SCHEMA_FILES = [
 
 const PG_IMAGE = "postgres:16-alpine";
 const TEST_TIMEOUT = 60_000;
-const JWT_SECRET = "test-secret";
+const CLIENT_ID = "token-tracker-api";
+const KID = "test-key-1";
 const USER_EMAIL = "alice@example.invalid";
+
+interface Idp {
+	issuer: string;
+	server: Server;
+	privateKey: KeyLike;
+}
 
 interface Env {
 	pg: StartedTestContainer;
 	db: Db;
 	server: Server;
+	idp: Idp;
 	baseUrl: string;
 	tempDir: string;
-	bearerJwt: string;
+	bearer: string;
 	databaseUrl: string;
 }
 
@@ -79,10 +84,7 @@ describe("POST /v1/traces — OTLP ingest", () => {
 
 			const res = await fetch(`${e.baseUrl}/v1/traces`, {
 				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: `Bearer ${e.bearerJwt}`,
-				},
+				headers: { "content-type": "application/json", authorization: `Bearer ${e.bearer}` },
 				body: JSON.stringify(payload),
 			});
 
@@ -97,14 +99,14 @@ describe("POST /v1/traces — OTLP ingest", () => {
 			expect(rows.every((r) => r.harness_name === "pi")).toBe(true);
 			expect(rows.every((r) => r.model === "glm-4.6")).toBe(true);
 
-			// Specifically: NO row got user_id=ceo@example.invalid. (D8)
+			// Specifically: NO row got user_id=ceo@example.invalid.
 			expect(await countByUserId(e, "ceo@example.invalid")).toBe(0);
 		},
 		TEST_TIMEOUT,
 	);
 
 	it(
-		"rejects requests without a bearer token (cookie path is forbidden on /v1/traces)",
+		"rejects requests without a bearer token",
 		async () => {
 			if (!env) throw new Error("test environment failed to set up");
 			const e = env;
@@ -115,6 +117,31 @@ describe("POST /v1/traces — OTLP ingest", () => {
 			});
 			expect(res.status).toBe(401);
 			expect(((await res.json()) as { error: string }).error).toBe("no token");
+		},
+		TEST_TIMEOUT,
+	);
+
+	it(
+		"rejects a forged token (signed by a different key)",
+		async () => {
+			if (!env) throw new Error("test environment failed to set up");
+			const e = env;
+			const { privateKey: otherKey } = await generateKeyPair("RS256", { extractable: true });
+			const forged = await new SignJWT({ preferred_username: "evil@example.invalid", roles: ["TokenTracker.Admin"] })
+				.setProtectedHeader({ alg: "RS256", kid: KID })
+				.setIssuer(e.idp.issuer)
+				.setAudience(CLIENT_ID)
+				.setSubject("evil")
+				.setIssuedAt()
+				.setExpirationTime("10m")
+				.sign(otherKey);
+			const res = await fetch(`${e.baseUrl}/v1/traces`, {
+				method: "POST",
+				headers: { "content-type": "application/json", authorization: `Bearer ${forged}` },
+				body: "{}",
+			});
+			expect(res.status).toBe(401);
+			expect(((await res.json()) as { error: string }).error).toBe("invalid token");
 		},
 		TEST_TIMEOUT,
 	);
@@ -134,7 +161,7 @@ describe("POST /v1/traces — OTLP ingest", () => {
 			]);
 			const res = await fetch(`${e.baseUrl}/v1/traces`, {
 				method: "POST",
-				headers: { "content-type": "application/json", authorization: `Bearer ${e.bearerJwt}` },
+				headers: { "content-type": "application/json", authorization: `Bearer ${e.bearer}` },
 				body: JSON.stringify(payload),
 			});
 			expect(res.status).toBe(200);
@@ -146,11 +173,11 @@ describe("POST /v1/traces — OTLP ingest", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Environment setup
+// Environment setup + IdP fixture
 // ---------------------------------------------------------------------------
 
 async function setupEnv(): Promise<Env> {
-	const tempDir = await mkdtemp(join(tmpdir(), "agent-spend-ingest-"));
+	const tempDir = await mkdtemp(join(tmpdir(), "token-tracker-ingest-"));
 
 	const pg = await new GenericContainer(PG_IMAGE)
 		.withEnvironment({ POSTGRES_USER: "test", POSTGRES_PASSWORD: "test", POSTGRES_DB: "test" })
@@ -170,54 +197,66 @@ async function setupEnv(): Promise<Env> {
 	dbUrl.password = "test";
 	const databaseUrl = dbUrl.toString();
 
+	const idp = await startIdp();
+	const verifier = createVerifier({ issuerUrl: idp.issuer, clientId: CLIENT_ID });
+
 	const apiPort = await freePort();
 	const baseUrl = `http://localhost:${apiPort}`;
-
 	const db = createDb(databaseUrl);
 
-	// Seed: a user + an api_tokens row for the bearer the test uses.
-	const userRow = await db.insertUser({ email: USER_EMAIL, name: "Alice", role: "developer" });
-	const userId = await db.findUserIdByEmail(userRow.email);
-	if (!userId) throw new Error("failed to read back inserted user id");
-
-	const secret = new TextEncoder().encode(JWT_SECRET);
-	const bearerJwt = await new SignJWT({
-		email: USER_EMAIL,
-		name: "Alice",
-		role: "developer",
-		machine: "test-machine",
-	})
-		.setProtectedHeader({ alg: "HS256" })
+	const bearer = await new SignJWT({ preferred_username: USER_EMAIL, name: "Alice", roles: ["TokenTracker.User"] })
+		.setProtectedHeader({ alg: "RS256", kid: KID })
+		.setIssuer(idp.issuer)
+		.setAudience(CLIENT_ID)
 		.setSubject(USER_EMAIL)
 		.setIssuedAt()
-		.setExpirationTime("90d")
-		.sign(secret);
+		.setExpirationTime("10m")
+		.sign(idp.privateKey);
 
-	await db.insertApiToken({
-		userId,
-		label: "test-machine",
-		tokenHash: sha256Hex(bearerJwt),
-		expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-	});
-
-	const app = createApp({
-		publicUrl: baseUrl,
-		jwtSecret: JWT_SECRET,
-		oidc: {} as OidcContext, // /v1/traces doesn't touch OIDC
-		db,
-	});
+	const app = createApp({ publicUrl: baseUrl, verifier, db });
 	const server: Server = await new Promise((resolve) => {
 		const s = app.listen(apiPort, () => resolve(s));
 	});
 
-	return { pg, db, server, baseUrl, tempDir, bearerJwt, databaseUrl };
+	return { pg, db, server, idp, baseUrl, tempDir, bearer, databaseUrl };
 }
 
 async function teardownEnv(e: Env): Promise<void> {
 	await new Promise<void>((resolve) => e.server.close(() => resolve()));
+	await new Promise<void>((resolve) => e.idp.server.close(() => resolve()));
 	await e.db.close();
 	await e.pg.stop({ timeout: 5000 });
 	await rm(e.tempDir, { recursive: true, force: true });
+}
+
+async function startIdp(): Promise<Idp> {
+	const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
+	const publicJwk: JWK = await exportJWK(publicKey);
+	publicJwk.kid = KID;
+	publicJwk.alg = "RS256";
+	publicJwk.use = "sig";
+
+	const server = createServer((req, res) => {
+		const url = req.url ?? "/";
+		if (url.startsWith("/.well-known/openid-configuration")) {
+			const issuer = `http://127.0.0.1:${addr().port}`;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ issuer, jwks_uri: `${issuer}/jwks`, token_endpoint: `${issuer}/token` }));
+			return;
+		}
+		if (url.startsWith("/jwks")) {
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ keys: [publicJwk] }));
+			return;
+		}
+		res.statusCode = 404;
+		res.end("not found");
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+	function addr(): net.AddressInfo {
+		return server.address() as net.AddressInfo;
+	}
+	return { issuer: `http://127.0.0.1:${addr().port}`, server, privateKey };
 }
 
 async function countSpendLogs(e: Env): Promise<number> {
@@ -300,7 +339,7 @@ function makePayload(spans: Array<Record<string, unknown>>): Record<string, unkn
 		resourceSpans: [
 			{
 				resource: {
-					attributes: [attr("service.name", "pi-usage-reporter"), attr("deployment.environment", "lab")],
+					attributes: [attr("service.name", "token-tracker-reporter"), attr("deployment.environment", "lab")],
 				},
 				scopeSpans: [{ scope: { name: "test" }, spans }],
 			},

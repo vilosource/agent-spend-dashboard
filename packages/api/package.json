@@ -20,14 +20,11 @@
 		"test": "vitest run --dir src"
 	},
 	"dependencies": {
-		"cookie": "^1.1.1",
 		"express": "^5.0.1",
 		"jose": "^5.10.0",
-		"openid-client": "^6.8.4",
 		"pg": "^8.20.0"
 	},
 	"devDependencies": {
-		"@types/cookie": "^0.6.0",
 		"@types/express": "^5.0.0",
 		"@types/pg": "^8.20.0",
 		"testcontainers": "^11.14.0",
