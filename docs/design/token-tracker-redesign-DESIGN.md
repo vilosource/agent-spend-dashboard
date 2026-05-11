@@ -104,12 +104,18 @@ originated requests. The cookie-vs-bearer transport split goes away.
 `@azure/msal-browser` library, configured with the IdP authority URL and
 the registered client id. PKCE flow.
 
-Token storage is **in-memory only**: a closure-scoped variable in the
-SPA's `lib/auth.ts`. Never `localStorage`, never `sessionStorage`. On tab
-refresh the in-memory state is lost; MSAL's silent renewal (hidden iframe
-hitting the IdP's authorize endpoint) recovers a new access token within
-~200ms if the user still has an IdP session cookie. If not, MSAL falls
-back to a popup or redirect. UX-equivalent to other internal apps.
+Token storage is `sessionStorage` (MSAL's `cacheLocation`): cleared when
+the tab closes, never written to disk, never `localStorage`, never shared
+across tabs — but it survives in-tab navigation and page reloads, which
+the SPA does on every route change (`/` → `/me`) and on the redirect-back
+from the IdP. (This started as "in-memory only"; that turned out to be
+non-functional — see D3 — every page navigation wipes an in-memory cache,
+and `ssoSilent` (the intended recovery path, a hidden iframe to the IdP's
+authorize endpoint) is blocked by browsers' third-party-cookie policies.
+`sessionStorage` is the smallest cache that actually works with the
+redirect flow.) On tab close the token is gone and the user clicks
+through a fresh sign-in redirect next time. UX-equivalent to other
+internal apps.
 
 The "session cookie" the previous design issued is gone. Any state the
 server needs about a user (last-seen, role-cache for analytics) lives in
@@ -179,18 +185,30 @@ namespace). The repo `vilosource/pi-extensions` stays as the home for
 pi-side extensions.
 
 ### D3 — SPA auth shape
-MSAL.js PKCE flow, access token in JS memory only. The server is a pure
-resource server; no server-issued credentials anywhere. The legacy
-"server-side OIDC redirect + opaque session id" option was considered
-and rejected: it would reintroduce "server as issuer" at smaller scale,
-moving the impersonation surface from a shared secret to a `sessions`
-table without closing it.
+MSAL.js PKCE redirect flow; the server is a pure resource server, no
+server-issued credentials anywhere. The legacy "server-side OIDC redirect
++ opaque session id" option was considered and rejected: it would
+reintroduce "server as issuer" at smaller scale, moving the impersonation
+surface from a shared secret to a `sessions` table without closing it.
+
+**Token cache: `sessionStorage`** — revised; originally specified
+"in-memory only", which is non-functional with this app. The SPA
+navigates with full page reloads (`/` → `/me`, and the IdP redirect-back),
+each of which wipes an in-memory MSAL cache; and the documented recovery
+path — `ssoSilent`, a hidden iframe to the IdP's authorize endpoint — is
+blocked by modern browsers' third-party-cookie policies (Safari/Firefox
+always; Chrome/Edge increasingly). Net effect of memory-only: the token
+is destroyed on the first post-login navigation and can't be recovered →
+an infinite sign-in loop. `sessionStorage` survives in-tab navigation and
+reloads; it's cleared on tab close, never written to disk, never
+`localStorage`. (Paired with `navigateToLoginRequestUrl: false` so MSAL
+doesn't add yet another page reload after the redirect handshake.)
 
 The XSS concern (access token reachable from JS) is bounded by: (a) the
 SPA being internal-only behind VPN, (b) Svelte 5's default-escape
 templating, (c) no third-party scripts, (d) a `Content-Security-Policy`
-header at deploy time, (e) discipline never to use `localStorage` or
-`sessionStorage`.
+header at deploy time, (e) never `localStorage`, and the token being
+discarded on tab close.
 
 ### D4 — Migration strategy
 Leave the existing legacy deploy running until the parallel token-tracker

@@ -4,15 +4,18 @@
  * Per token-tracker-redesign-DESIGN.md §4.2 / D3:
  *   - the SPA obtains an IdP access token; the server (a pure resource
  *     server) only ever verifies it.
- *   - the access token lives in memory only — `cacheLocation:
- *     "memoryStorage"`. On tab refresh it's lost; `ssoSilent` (a hidden
- *     iframe to the IdP authorize endpoint) recovers a fresh one within
- *     ~200ms if the user still has an IdP session, otherwise the user
- *     sees the sign-in CTA and clicks through a redirect. Never
- *     localStorage, never sessionStorage for the token. (MSAL's
- *     *temporary* cache — the few-second PKCE state during a redirect —
- *     defaults to sessionStorage and must, or the redirect handshake
- *     can't complete; that's transient request state, not the token.)
+ *   - the token is cached in `sessionStorage`: gone when the tab closes,
+ *     never written to disk, never shared across tabs — but it survives
+ *     in-tab navigation and page reloads, which this app relies on (it
+ *     routes `/` → `/me` with a full reload, and the IdP redirect-back
+ *     is a reload too). The original D3 said memory-only; that proved
+ *     non-functional — every navigation wipes an in-memory cache, and
+ *     `ssoSilent` (the intended recovery path: a hidden iframe to the
+ *     IdP) is blocked by modern browsers' third-party-cookie policies —
+ *     so D3 was revised to `sessionStorage`. Still never `localStorage`.
+ *     (`storeAuthStateInCookie` keeps the transient PKCE/state alive
+ *     across the cross-origin redirect in partitioned-storage browsers;
+ *     that's in-flight request state, not the token.)
  *
  * Config is build-time, via Vite env vars (the SPA bundle is baked into
  * the API image at build time, so the deploying org sets these when it
@@ -67,15 +70,27 @@ const msal = new PublicClientApplication({
 		// local lab IdP. Also lets MSAL accept an `http://localhost` authority for
 		// the lab; in AAD mode a non-Entra authority would need knownAuthorities.
 		protocolMode: ProtocolMode.OIDC,
+		// Don't navigate the page back to the login-request URL after the redirect
+		// handshake. The redirect URI *is* the app entry point, so that navigation
+		// would just reload the page (pointlessly, and — before we moved the cache
+		// off memoryStorage — it threw away the token we'd just acquired). MSAL
+		// processes the response and strips `?code=…`/`#code=…` from the URL in
+		// place instead.
+		navigateToLoginRequestUrl: false,
 	},
 	cache: {
-		// The access token lives in memory only (D3). The redirect handshake still
-		// needs somewhere to stash the transient request state (state, nonce, PKCE
-		// verifier) across the navigation to the IdP and back — MSAL requires a
-		// cookie for that when the main cache is memoryStorage, otherwise
-		// loginRedirect throws `in_mem_redirect_unavailable`. That cookie holds
-		// only the in-flight request, not the token, and MSAL clears it on return.
-		cacheLocation: BrowserCacheLocation.MemoryStorage,
+		// Token cache in `sessionStorage`: cleared when the tab closes, never
+		// written to disk, never shared across tabs — but it survives in-tab
+		// navigation and page reloads, which this app does on every route change
+		// (`/` → `/me`) and on the redirect-back from the IdP. (We tried
+		// `memoryStorage` first, per the original D3 — see DESIGN §4.2 — but it's
+		// non-functional here: every navigation wipes it, and the documented
+		// recovery path, `ssoSilent`'s hidden IdP iframe, is blocked by modern
+		// browsers' third-party-cookie policies.) `storeAuthStateInCookie` keeps
+		// the transient PKCE/state surviving the cross-origin hop even in browsers
+		// that partition storage; that cookie holds the in-flight request, not the
+		// token, and MSAL clears it on return.
+		cacheLocation: BrowserCacheLocation.SessionStorage,
 		storeAuthStateInCookie: true,
 	},
 });
