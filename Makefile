@@ -10,28 +10,25 @@ COMPOSE     := docker compose --project-directory $(COMPOSE_DIR) \
                               -f $(COMPOSE_DIR)/compose.yml \
                               -f $(COMPOSE_DIR)/compose.override.yml
 
-.PHONY: help lab lab-up lab-down reset seed psql logs ps wait-healthy clean
+.PHONY: help lab lab-up lab-down reset seed psql smoke logs ps wait-healthy clean
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-lab: lab-up wait-healthy ## Bring the lab up (Postgres + Grafana + api + Dex; Collector + bridge as regression fixtures), wait for healthy.
+lab: lab-up wait-healthy ## Bring the lab up (Postgres + Grafana + api + SPA + lab IdP; Collector + bridge as regression fixtures), wait for healthy.
 	@echo
 	@echo "Lab is up:"
 	@echo "  Grafana:   http://localhost:7000  (anonymous viewer; admin/admin to log in)"
-	@echo "  API:       http://localhost:7080  (login at /auth/login → Dex; /v1/traces is the production OTLP path)"
+	@echo "  API + SPA: http://localhost:7080  (sign in via the lab IdP; /v1/traces is the OTLP ingest path)"
+	@echo "  lab IdP:   http://idp.localhost:7019  (identities: lab-admin / lab-user / lab-viewer — no passwords)"
 	@echo
 	@echo "  For Postgres:  make psql  (no host port mapping by design)"
-	@echo "  Dex (lab IdP):  http://idp.localhost:7019"
 	@echo
-	@echo "  Regression fixtures (lab-only since phase 0.3.8 / D6 sunset):"
+	@echo "  Regression fixtures (lab-only — exercise the standard OTel pipeline):"
 	@echo "    Collector OTLP/HTTP:  http://localhost:7018"
 	@echo "    bridge:                tails Collector JSONL → Postgres (catches OTel-pipeline regressions only)"
 	@echo
-	@echo "  Lab users:   lab-admin@example.invalid / lab"
-	@echo "               lab-user@example.invalid  / lab"
-	@echo
-	@echo "Run 'make seed' to populate with synthetic data via the regression-fixture path."
+	@echo "Next: 'make seed' for synthetic data, 'make smoke' for a fast auth + ingest check."
 
 lab-up: ## docker compose up -d
 	$(COMPOSE) up -d --build postgres collector bridge grafana api idp
@@ -49,6 +46,9 @@ seed: ## Run the synthetic emitter against the local Collector.
 
 psql: ## Open psql against the lab Postgres.
 	$(COMPOSE) exec postgres psql -U token_tracker -d token_tracker
+
+smoke: ## Fast end-to-end check of the running lab (auth + /v1/traces ingest; no browser/LLM). Requires `make lab`.
+	@bash scripts/smoke.sh
 
 logs: ## Tail logs (use S=<service> to scope, e.g. make logs S=bridge).
 	@$(COMPOSE) logs -f $(S)
