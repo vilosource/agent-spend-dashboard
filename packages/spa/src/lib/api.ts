@@ -1,16 +1,24 @@
 /**
- * Tiny typed wrapper over fetch for the /api/* endpoints. Cookies are
- * sent automatically by the browser; on a 401 we redirect to the OIDC
- * flow at /auth/login (the API redirects from there to Dex / Entra /
- * etc.). Body shape mirrors what the Express handlers return verbatim.
+ * Tiny typed wrapper over fetch for the /api/* endpoints. Every request
+ * carries `Authorization: Bearer <IdP access token>` obtained from MSAL
+ * (see lib/auth.ts) — there is no cookie and no /auth/* on the server.
+ * Body shape mirrors what the Express handlers return verbatim.
+ *
+ *   401 → the token is missing/expired and silent renewal failed →
+ *         `UnauthenticatedError` (caller triggers a login redirect).
+ *   403 → authenticated but the IdP didn't assign this user a role for
+ *         the app → `ForbiddenError` (a permanent state for that user;
+ *         redirecting to login won't help — show the message).
  */
+
+import { getAccessToken, login } from "./auth.js";
 
 export interface Identity {
 	readonly email: string;
 	readonly name: string | null;
-	readonly role: "admin" | "developer";
-	readonly tokenLabel: string;
-	readonly source: "cookie" | "bearer";
+	readonly role: "admin" | "user" | "viewer";
+	readonly roles: readonly string[];
+	readonly oid: string | null;
 }
 
 export interface UsageTotals {
@@ -68,9 +76,21 @@ export class UnauthenticatedError extends Error {
 	}
 }
 
+export class ForbiddenError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ForbiddenError";
+	}
+}
+
 async function getJson<T>(url: string): Promise<T> {
-	const res = await fetch(url, { credentials: "same-origin" });
+	const token = await getAccessToken();
+	const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
 	if (res.status === 401) throw new UnauthenticatedError();
+	if (res.status === 403) {
+		const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+		throw new ForbiddenError(typeof body.error === "string" ? body.error : "you don't have access to this app");
+	}
 	if (!res.ok) throw new Error(`${url} → ${res.status}`);
 	return (await res.json()) as T;
 }
@@ -102,9 +122,12 @@ export function fetchSessions(opts?: {
 	return getJson<SessionsResponse>(`/api/me/sessions${qs ? `?${qs}` : ""}`);
 }
 
+/** Begin the IdP login redirect (handled entirely client-side by MSAL). */
 export function redirectToLogin(): void {
-	window.location.assign("/auth/login");
+	login();
 }
+
+export { logout } from "./auth.js";
 
 export function fmtUsd(n: number): string {
 	return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(n);

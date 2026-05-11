@@ -1,7 +1,9 @@
 <script lang="ts">
+import { getActiveAccount, isAuthConfigured } from "../lib/auth.js";
 import CostTimeseries from "../lib/charts/CostTimeseries.svelte";
 import ModelMix from "../lib/charts/ModelMix.svelte";
 import {
+	ForbiddenError,
 	type Identity,
 	type SessionItem,
 	type UsageResponse,
@@ -13,6 +15,7 @@ import {
 	fmtDuration,
 	fmtInt,
 	fmtUsd,
+	logout,
 	redirectToLogin,
 } from "../lib/api.js";
 
@@ -24,8 +27,15 @@ interface Loaded {
 	sessions: readonly SessionItem[];
 }
 
+type PageState =
+	| { kind: "loading" }
+	| { kind: "loaded"; data: Loaded }
+	| { kind: "error"; message: string }
+	| { kind: "forbidden"; message: string }
+	| { kind: "not-configured" };
+
 let rangeDays: RangeKey = $state("7");
-let state: { kind: "loading" } | { kind: "loaded"; data: Loaded } | { kind: "error"; message: string } = $state({ kind: "loading" });
+let pageState: PageState = $state(isAuthConfigured ? { kind: "loading" } : { kind: "not-configured" });
 
 function rangeBounds(days: RangeKey): { from: Date; to: Date } {
 	const to = new Date();
@@ -34,7 +44,15 @@ function rangeBounds(days: RangeKey): { from: Date; to: Date } {
 }
 
 async function load(days: RangeKey): Promise<void> {
-	state = { kind: "loading" };
+	if (!isAuthConfigured) {
+		pageState = { kind: "not-configured" };
+		return;
+	}
+	if (!getActiveAccount()) {
+		redirectToLogin(); // navigates away
+		return;
+	}
+	pageState = { kind: "loading" };
 	try {
 		const { from, to } = rangeBounds(days);
 		const [identity, usage, sessions] = await Promise.all([
@@ -42,19 +60,18 @@ async function load(days: RangeKey): Promise<void> {
 			fetchUsage(from, to),
 			fetchSessions({ from, to, limit: 25 }),
 		]);
-		state = { kind: "loaded", data: { identity, usage, sessions: sessions.items } };
+		pageState = { kind: "loaded", data: { identity, usage, sessions: sessions.items } };
 	} catch (err) {
 		if (err instanceof UnauthenticatedError) {
-			redirectToLogin();
+			redirectToLogin(); // token gone & silent renewal failed — navigates away
 			return;
 		}
-		state = { kind: "error", message: err instanceof Error ? err.message : String(err) };
+		if (err instanceof ForbiddenError) {
+			pageState = { kind: "forbidden", message: err.message };
+			return;
+		}
+		pageState = { kind: "error", message: err instanceof Error ? err.message : String(err) };
 	}
-}
-
-async function logout(): Promise<void> {
-	await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
-	window.location.assign("/");
 }
 
 $effect(() => {
@@ -66,10 +83,10 @@ $effect(() => {
 	<header class="flex items-baseline justify-between gap-6">
 		<div>
 			<h1 class="text-2xl font-semibold tracking-tight">My Usage</h1>
-			{#if state.kind === "loaded"}
+			{#if pageState.kind === "loaded"}
 				<p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-					{state.data.identity.email} ·
-					<span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-300">{state.data.identity.role}</span>
+					{pageState.data.identity.email} ·
+					<span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-300">{pageState.data.identity.role}</span>
 				</p>
 			{/if}
 		</div>
@@ -88,12 +105,18 @@ $effect(() => {
 		</div>
 	</header>
 
-	{#if state.kind === "loading"}
+	{#if pageState.kind === "loading"}
 		<p class="mt-12 text-slate-500">Loading…</p>
-	{:else if state.kind === "error"}
-		<p class="mt-12 text-rose-600">Error: {state.message}</p>
+	{:else if pageState.kind === "not-configured"}
+		<p class="mt-12 text-slate-600 dark:text-slate-400">
+			Auth isn't configured — set <code>VITE_TOKEN_TRACKER_*</code> and rebuild the SPA.
+		</p>
+	{:else if pageState.kind === "forbidden"}
+		<p class="mt-12 text-amber-600">{pageState.message}</p>
+	{:else if pageState.kind === "error"}
+		<p class="mt-12 text-rose-600">Error: {pageState.message}</p>
 	{:else}
-		{@const data = state.data}
+		{@const data = pageState.data}
 
 		<!-- KPI cards -->
 		<section class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">

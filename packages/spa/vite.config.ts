@@ -15,6 +15,9 @@ export default defineConfig({
 		emptyOutDir: true,
 		assetsDir: "assets",
 		sourcemap: true,
+		// ES2022 so top-level `await` (main.ts bootstraps MSAL before mounting)
+		// is allowed. The SPA is internal-only behind a VPN — modern browsers.
+		target: "es2022",
 	},
 	server: {
 		// Local dev: Vite serves on a separate port. To exercise auth
