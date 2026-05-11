@@ -1,4 +1,4 @@
--- agent_spend_logs: durable per-turn spend log.
+-- usage_log: durable per-turn usage log.
 -- See https://github.com/vilosource/pi-extensions/blob/main/docs/design/pi-usage-reporter-DESIGN.md §5.2
 --
 -- One row per assistant turn, written by the OTel Collector's postgres exporter
@@ -7,7 +7,7 @@
 -- This file runs on first startup only (Postgres init script convention); subsequent
 -- changes ship as numbered migration files in this directory.
 
-CREATE TABLE IF NOT EXISTS agent_spend_logs (
+CREATE TABLE IF NOT EXISTS usage_log (
    id                       BIGSERIAL    PRIMARY KEY,
    ts                       TIMESTAMPTZ  NOT NULL,
    ingest_ts                TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -61,19 +61,19 @@ CREATE TABLE IF NOT EXISTS agent_spend_logs (
 );
 
 -- Hot-path indexes per design §5.2
-CREATE INDEX IF NOT EXISTS agent_spend_logs_user_ts        ON agent_spend_logs (user_id, ts DESC);
-CREATE INDEX IF NOT EXISTS agent_spend_logs_team_ts        ON agent_spend_logs (team, ts DESC) WHERE team IS NOT NULL;
-CREATE INDEX IF NOT EXISTS agent_spend_logs_repo_ts        ON agent_spend_logs (workspace_repo, ts DESC) WHERE workspace_repo IS NOT NULL;
-CREATE INDEX IF NOT EXISTS agent_spend_logs_model_ts       ON agent_spend_logs (model, ts DESC);
-CREATE INDEX IF NOT EXISTS agent_spend_logs_provider_ts   ON agent_spend_logs (provider, ts DESC);
-CREATE INDEX IF NOT EXISTS agent_spend_logs_session       ON agent_spend_logs (session_id);
-CREATE INDEX IF NOT EXISTS agent_spend_logs_ts            ON agent_spend_logs (ts DESC);
-CREATE INDEX IF NOT EXISTS agent_spend_logs_environment   ON agent_spend_logs (environment, ts DESC);
-CREATE INDEX IF NOT EXISTS agent_spend_logs_harness_name  ON agent_spend_logs (harness_name, ts DESC);
+CREATE INDEX IF NOT EXISTS usage_log_user_ts        ON usage_log (user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS usage_log_team_ts        ON usage_log (team, ts DESC) WHERE team IS NOT NULL;
+CREATE INDEX IF NOT EXISTS usage_log_repo_ts        ON usage_log (workspace_repo, ts DESC) WHERE workspace_repo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS usage_log_model_ts       ON usage_log (model, ts DESC);
+CREATE INDEX IF NOT EXISTS usage_log_provider_ts   ON usage_log (provider, ts DESC);
+CREATE INDEX IF NOT EXISTS usage_log_session       ON usage_log (session_id);
+CREATE INDEX IF NOT EXISTS usage_log_ts            ON usage_log (ts DESC);
+CREATE INDEX IF NOT EXISTS usage_log_environment   ON usage_log (environment, ts DESC);
+CREATE INDEX IF NOT EXISTS usage_log_harness_name  ON usage_log (harness_name, ts DESC);
 
 -- Materialised view for "last 14 days" hot queries (per design §5.4).
 -- Refreshed on a cron in the API service or by the seeder after seeding.
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_recent_spend AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_recent_usage AS
 SELECT
    date_trunc('day', ts)        AS day,
    user_id,
@@ -90,16 +90,16 @@ SELECT
    SUM(cache_write)             AS cache_write,
    SUM(cost_total_usd)          AS cost_usd,
    COUNT(*)                     AS turns
-FROM agent_spend_logs
+FROM usage_log
 WHERE ts >= now() - INTERVAL '14 days'
 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
 WITH NO DATA;
 
-CREATE INDEX IF NOT EXISTS mv_recent_spend_day_user ON mv_recent_spend (day, user_id);
-CREATE INDEX IF NOT EXISTS mv_recent_spend_day_team ON mv_recent_spend (day, team);
-CREATE INDEX IF NOT EXISTS mv_recent_spend_day_repo ON mv_recent_spend (day, workspace_repo);
+CREATE INDEX IF NOT EXISTS mv_recent_usage_day_user ON mv_recent_usage (day, user_id);
+CREATE INDEX IF NOT EXISTS mv_recent_usage_day_team ON mv_recent_usage (day, team);
+CREATE INDEX IF NOT EXISTS mv_recent_usage_day_repo ON mv_recent_usage (day, workspace_repo);
 
-COMMENT ON TABLE agent_spend_logs IS
+COMMENT ON TABLE usage_log IS
   'One row per assistant turn from any harness emitting OTel GenAI + agent.* attributes.';
-COMMENT ON COLUMN agent_spend_logs.cost_estimation IS
+COMMENT ON COLUMN usage_log.cost_estimation IS
   'metered=provider returned per-token cost; subscription=tokens reported but cost zero (e.g. Copilot); unreported=both zero (aborted/error). See pi-extensions decisions log D12.';

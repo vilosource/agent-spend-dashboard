@@ -13,7 +13,7 @@ import type { Db } from "./db.js";
 function makeFakeDb(): Db {
 	return {
 		async upsertUser() {},
-		async insertSpendLogs() {},
+		async insertUsageLog() {},
 		async fetchUsageTotals() {
 			return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
 		},

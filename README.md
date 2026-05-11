@@ -47,11 +47,11 @@ Run the lab:
 make lab     # bring up Postgres + Collector + bridge + Grafana (~25s)
 make seed    # emit ~2800 synthetic spans (~5s)
 open http://localhost:7000   # browse the dashboards (anonymous viewer enabled)
-make psql    # poke around the agent_spend_logs table
+make psql    # poke around the usage_log table
 make clean   # tear everything down (irreversible)
 ```
 
-Three dashboards are pre-loaded in the **Agent Spend** folder:
+Three dashboards are pre-loaded in the **Token Tracker** folder:
 
 | Dashboard | Use it for |
 |---|---|
@@ -86,7 +86,7 @@ flowchart LR
   subgraph deploy["Reference dashboard server (this repo, deployed by the organization)"]
     direction TB
     col["OTel Collector"]
-    pg[("Postgres<br/>agent_spend_logs")]
+    pg[("Postgres<br/>usage_log")]
     api["API + SPA"]
     graf["Grafana<br/>(organization's existing instance)"]
 

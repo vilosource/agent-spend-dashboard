@@ -129,7 +129,7 @@ assert_latest_row_field() {
   local field="${1:?assert_latest_row_field: missing field}"
   local expected="${2:?assert_latest_row_field: missing expected}"
   local got
-  got="$(_pg_query "SELECT $field FROM agent_spend_logs
+  got="$(_pg_query "SELECT $field FROM usage_log
                      WHERE user_id = '${SCENARIO_USER_EMAIL//\'/\'\'}'
                   ORDER BY ts DESC LIMIT 1" | tr -d ' \n')"
   if [[ "$got" == "$expected" ]]; then
@@ -149,7 +149,7 @@ assert_latest_row_field() {
 assert_latest_row_field_nonempty() {
   local field="${1:?assert_latest_row_field_nonempty: missing field}"
   local got
-  got="$(_pg_query "SELECT $field::text FROM agent_spend_logs
+  got="$(_pg_query "SELECT $field::text FROM usage_log
                      WHERE user_id = '${SCENARIO_USER_EMAIL//\'/\'\'}'
                   ORDER BY ts DESC LIMIT 1" | tr -d ' \n')"
   if [[ -n "$got" && "$got" != "0" && "$got" != "" ]]; then
@@ -166,12 +166,12 @@ assert_latest_row_field_nonempty() {
 
 _pg_count_rows() {
   local email="$1"
-  _pg_query "SELECT COUNT(*) FROM agent_spend_logs
+  _pg_query "SELECT COUNT(*) FROM usage_log
               WHERE user_id = '${email//\'/\'\'}'" | tr -d ' \n'
 }
 
 _pg_query() {
   local sql="$1"
   docker exec -i "$PG_CONTAINER" \
-    psql -U agent_spend -d agent_spend -At -c "$sql" 2>/dev/null
+    psql -U token_tracker -d token_tracker -At -c "$sql" 2>/dev/null
 }

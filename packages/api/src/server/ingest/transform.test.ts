@@ -21,7 +21,7 @@ const happySpan = {
 		attr("agent.machine.id", "11111111-1111-1111-1111-111111111111"),
 		attr("agent.session.id", "22222222-2222-2222-2222-222222222222"),
 		attr("agent.workspace.cwd", "/home/alice/repo"),
-		attr("agent.workspace.repo", "vilosource/agent-spend-dashboard"),
+		attr("agent.workspace.repo", "vilosource/token-tracker"),
 		attr("agent.workspace.branch", "main"),
 		attr("agent.workspace.is_ci", false, "boolValue"),
 		attr("gen_ai.provider.name", "z.ai"),
@@ -102,7 +102,7 @@ describe("spanToRow", () => {
 		expect(row?.machineId).toBe("11111111-1111-1111-1111-111111111111");
 		expect(row?.sessionId).toBe("22222222-2222-2222-2222-222222222222");
 		expect(row?.workspaceCwd).toBe("/home/alice/repo");
-		expect(row?.workspaceRepo).toBe("vilosource/agent-spend-dashboard");
+		expect(row?.workspaceRepo).toBe("vilosource/token-tracker");
 		expect(row?.workspaceBranch).toBe("main");
 		expect(row?.workspaceIsCi).toBe(false);
 		expect(row?.provider).toBe("z.ai");

@@ -48,7 +48,7 @@ seed: ## Run the synthetic emitter against the local Collector.
 	$(COMPOSE) run --rm seeder
 
 psql: ## Open psql against the lab Postgres.
-	$(COMPOSE) exec postgres psql -U agent_spend -d agent_spend
+	$(COMPOSE) exec postgres psql -U token_tracker -d token_tracker
 
 logs: ## Tail logs (use S=<service> to scope, e.g. make logs S=bridge).
 	@$(COMPOSE) logs -f $(S)

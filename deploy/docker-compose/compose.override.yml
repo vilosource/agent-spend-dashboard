@@ -8,7 +8,7 @@
 #
 # A production deployment uses compose.yml WITHOUT this override.
 
-name: agent-spend
+name: token-tracker
 
 # Port mapping policy (per the "do we need to expose Postgres" discussion):
 #
@@ -32,9 +32,9 @@ name: agent-spend
 services:
    postgres:
       environment:
-         POSTGRES_USER: agent_spend
+         POSTGRES_USER: token_tracker
          POSTGRES_PASSWORD: dev
-         POSTGRES_DB: agent_spend
+         POSTGRES_DB: token_tracker
       # No host port mapping — use `make psql` for ad-hoc queries.
 
    # OTel Collector — LAB-ONLY since phase 0.3.8 (D6 sunset complete).
@@ -68,8 +68,8 @@ services:
       user: "0:0"
 
    # Bridge: tails the Collector's JSONL output and inserts into Postgres.
-   # Until the API service lands (phase 0.3), this is the only writer to
-   # agent_spend_logs. Replaced by the API in 0.3.
+   # Kept in the lab as a regression fixture for the standard OTel pipeline;
+   # production ingest is the API's /v1/traces. Both write to usage_log.
    bridge:
       build: ../../lab/bridge
       restart: unless-stopped
@@ -121,7 +121,7 @@ services:
          # via the deploying organization's secret store / IdP.
          AGENT_SPEND_JWT_SECRET: lab-jwt-secret-not-for-production
          AGENT_SPEND_OIDC_ISSUER_URL: http://idp.localhost:7019
-         AGENT_SPEND_OIDC_CLIENT_ID: agent-spend
+         AGENT_SPEND_OIDC_CLIENT_ID: token-tracker
          AGENT_SPEND_OIDC_CLIENT_SECRET: lab-secret
       # idp.localhost resolves to loopback on the browser (RFC 6761) and
       # via host-gateway here so the api container reaches the same Dex

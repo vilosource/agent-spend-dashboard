@@ -278,7 +278,7 @@ async function setupEnv(): Promise<Env> {
 	const apiPort = await freePort();
 	const baseUrl = `http://localhost:${apiPort}`;
 	const db = createDb(databaseUrl);
-	await seedSpendLogs(databaseUrl);
+	await seedUsageLog(databaseUrl);
 
 	const app = createApp({ publicUrl: baseUrl, verifier, db });
 	const server: Server = await new Promise((resolve) => {
@@ -355,7 +355,7 @@ async function mintToken(idp: Idp, email: string, name: string, roles: readonly 
  * byModel rollup is non-trivial. Spread across recent days so byDay
  * has multiple buckets.
  */
-async function seedSpendLogs(databaseUrl: string): Promise<void> {
+async function seedUsageLog(databaseUrl: string): Promise<void> {
 	const pool = new Pool({ connectionString: databaseUrl });
 	try {
 		const now = new Date();
@@ -505,7 +505,7 @@ async function seedSpendLogs(databaseUrl: string): Promise<void> {
 		];
 		for (const [ts, userId, machineId, sessionId, model, provider, cost] of rows) {
 			await pool.query(
-				`INSERT INTO agent_spend_logs (
+				`INSERT INTO usage_log (
 					ts, user_id, machine_id, session_id, provider, api, model,
 					harness_name, input_tokens, output_tokens,
 					cost_input_usd, cost_output_usd, cost_total_usd

@@ -9,13 +9,12 @@
  * foreign-key target. Role is NOT stored; it comes from the token's
  * `roles` claim every request (token-tracker-redesign-DESIGN.md D7).
  *
- * The usage table is still named `agent_spend_logs` here — the rename
- * to `usage_log` lands with the schema-migration phase.
+ * The events table is `usage_log` (renamed from the old `agent_spend_logs`).
  * Schema: see deploy/docker-compose/postgres/init/{001_schema,002_auth}.sql.
  */
 
 import { Pool as PgPool, type Pool } from "pg";
-import type { SpendLogRow } from "./ingest/transform.js";
+import type { UsageLogRow } from "./ingest/transform.js";
 
 export interface UpsertUserInput {
 	readonly email: string;
@@ -31,10 +30,10 @@ export interface Db {
 	 * also store the IdP `oid` when the token carries one.
 	 */
 	upsertUser(input: UpsertUserInput): Promise<void>;
-	/** Batch INSERT into agent_spend_logs. No-op for an empty array. */
-	insertSpendLogs(rows: readonly SpendLogRow[]): Promise<void>;
+	/** Batch INSERT into usage_log. No-op for an empty array. */
+	insertUsageLog(rows: readonly UsageLogRow[]): Promise<void>;
 	/**
-	 * Aggregate totals over agent_spend_logs filtered by `where` (an
+	 * Aggregate totals over usage_log filtered by `where` (an
 	 * AND-able SQL fragment built via auth/scope.ts) and `params`.
 	 * Returns the four scalar sums + count the /me KPI cards display.
 	 */
@@ -94,7 +93,7 @@ export interface SessionRow {
 	readonly models: readonly string[];
 }
 
-const SPEND_LOG_COLUMNS = [
+const USAGE_LOG_COLUMNS = [
 	"ts",
 	"user_id",
 	"team",
@@ -125,7 +124,7 @@ const SPEND_LOG_COLUMNS = [
 	"environment",
 ] as const;
 
-function spendLogValues(row: SpendLogRow): readonly unknown[] {
+function usageLogValues(row: UsageLogRow): readonly unknown[] {
 	return [
 		row.ts,
 		row.userId,
@@ -190,7 +189,7 @@ export function createDb(databaseUrl: string): Db {
 				        COALESCE(SUM(output_tokens), 0)::text   AS output_tokens,
 				        COALESCE(SUM(cache_read), 0)::text      AS cache_read,
 				        COALESCE(SUM(cache_write), 0)::text     AS cache_write
-				   FROM agent_spend_logs
+				   FROM usage_log
 				  WHERE ${where}`,
 				[...params],
 			);
@@ -219,7 +218,7 @@ export function createDb(databaseUrl: string): Db {
 				        COUNT(*)::text                                    AS turns,
 				        COALESCE(SUM(input_tokens), 0)::text              AS input_tokens,
 				        COALESCE(SUM(output_tokens), 0)::text             AS output_tokens
-				   FROM agent_spend_logs
+				   FROM usage_log
 				  WHERE ${where}
 				  GROUP BY 1
 				  ORDER BY 1`,
@@ -245,7 +244,7 @@ export function createDb(databaseUrl: string): Db {
 				        provider,
 				        COALESCE(SUM(cost_total_usd), 0)::text AS cost_usd,
 				        COUNT(*)::text                         AS turns
-				   FROM agent_spend_logs
+				   FROM usage_log
 				  WHERE ${where}
 				  GROUP BY model, provider
 				  ORDER BY SUM(cost_total_usd) DESC NULLS LAST`,
@@ -261,7 +260,7 @@ export function createDb(databaseUrl: string): Db {
 
 		async fetchSessions({ where, params, limit, cursorLastTs, cursorSessionId }) {
 			// Build a query that:
-			//   - groups agent_spend_logs by session_id under `where`
+			//   - groups usage_log by session_id under `where`
 			//   - keeps only sessions whose (max(ts), session_id) is strictly
 			//     less than the cursor when one is provided
 			//   - returns up to `limit` rows ordered by (last_ts DESC, session_id DESC)
@@ -282,7 +281,7 @@ export function createDb(databaseUrl: string): Db {
 				       COALESCE(SUM(cost_total_usd), 0)::text   AS cost_usd,
 				       COUNT(*)::text                           AS turns,
 				       array_agg(DISTINCT model)                AS models
-				  FROM agent_spend_logs
+				  FROM usage_log
 				 WHERE ${where}
 				 GROUP BY session_id
 				 ${cursorFragment}
@@ -307,15 +306,15 @@ export function createDb(databaseUrl: string): Db {
 			}));
 		},
 
-		async insertSpendLogs(rows) {
+		async insertUsageLog(rows) {
 			if (rows.length === 0) return;
 			// Postgres' parameter limit is 65 535 across all rows. With
-			// SPEND_LOG_COLUMNS.length columns per row that bounds us at
+			// USAGE_LOG_COLUMNS.length columns per row that bounds us at
 			// ~2 340 rows per call. Real OTLP batches are much smaller
 			// (one extension flushes a handful per turn), so we INSERT in
 			// one call. If a future scenario needs bigger batches, chunk
-			// by Math.floor(65000 / SPEND_LOG_COLUMNS.length).
-			const colCount = SPEND_LOG_COLUMNS.length;
+			// by Math.floor(65000 / USAGE_LOG_COLUMNS.length).
+			const colCount = USAGE_LOG_COLUMNS.length;
 			const placeholders: string[] = [];
 			const values: unknown[] = [];
 			let p = 1;
@@ -326,9 +325,9 @@ export function createDb(databaseUrl: string): Db {
 					p += 1;
 				}
 				placeholders.push(`(${row$.join(",")})`);
-				values.push(...spendLogValues(row));
+				values.push(...usageLogValues(row));
 			}
-			const sql = `INSERT INTO agent_spend_logs (${SPEND_LOG_COLUMNS.join(",")}) VALUES ${placeholders.join(",")}`;
+			const sql = `INSERT INTO usage_log (${USAGE_LOG_COLUMNS.join(",")}) VALUES ${placeholders.join(",")}`;
 			await pool.query(sql, values);
 		},
 

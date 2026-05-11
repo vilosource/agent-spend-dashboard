@@ -4,7 +4,7 @@
 #
 # This is a regression-fixture image, NOT a production artifact. It
 # exists so the scenarios under lab/scenario/scenarios/*.sh can prove
-# end-to-end that real OTLP spans land as real rows in agent_spend_logs.
+# end-to-end that real OTLP spans land as real rows in usage_log.
 # Each scenario invocation is a fresh container.
 #
 # What's baked in:
@@ -16,7 +16,7 @@
 # What's NOT baked in (provided at run time by scripts/scenario):
 #   - the reporter's dist/      → /opt/reporter/dist  (bind mount)
 #   - the LLM provider key      → ZAI_API_KEY env var
-#   - the agent-spend bearer    → PI_USAGE_TOKEN env var
+#   - the token-tracker bearer    → PI_USAGE_TOKEN env var
 #   - the OTLP endpoint URL     → PI_USAGE_ENDPOINT env var
 
 FROM node:20-slim

@@ -24,7 +24,7 @@ function makeDb(opts: { failUpsert?: boolean } = {}): RecordingDb {
 			if (opts.failUpsert) throw new Error("db down");
 			upserted.push(input);
 		},
-		async insertSpendLogs() {},
+		async insertUsageLog() {},
 		async fetchUsageTotals() {
 			return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
 		},

@@ -82,7 +82,7 @@ function transformOrReject(payload: OtlpTracesPayload, email: string, res: Respo
 
 async function insertOrReject(db: Db, result: TransformResult, res: Response): Promise<boolean> {
 	try {
-		await db.insertSpendLogs(result.rows);
+		await db.insertUsageLog(result.rows);
 		return true;
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);

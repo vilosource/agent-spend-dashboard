@@ -3,7 +3,7 @@
 Drives a real `pi` turn (with a real LLM provider) inside a Docker
 container with `pi-usage-reporter` loaded as a pi extension, pointed at
 the lab API's `/v1/traces` endpoint. Asserts that the resulting OTLP
-span lands as a row in `agent_spend_logs` with the right shape.
+span lands as a row in `usage_log` with the right shape.
 
 **Why this exists.** The test suite (`vitest run`) covers the API in
 isolation — pure transforms, requireAuth middleware, /me/* SQL — using
@@ -12,7 +12,7 @@ works. They do not prove that **a real reporter, talking real OTLP, on
 the real network**, lands rows the SPA can render. That contract is
 what this harness covers.
 
-This is the agent-spend equivalent of mykb's `scripts/spike/kb-spike` +
+This is the token-tracker equivalent of mykb's `scripts/spike/kb-spike` +
 `experiments/<name>/scenarios/`. Pattern intentionally similar; image
 and verbs scaled down.
 
@@ -49,7 +49,7 @@ sources it into a subshell where helpers (`scenario_use_user`,
 `scenario_run_pi`, `assert_*`) are already defined.
 
 ```bash
-intent "real pi+zai turn lands a real row in agent_spend_logs"
+intent "real pi+zai turn lands a real row in usage_log"
 
 prepare() {
    scenario_use_user "lab-admin@example.invalid"   # forge JWT, mint bearer
@@ -83,7 +83,7 @@ Phases default to no-ops, so a scenario can omit any of them.
 ## Network + auth contract
 
 - The container joins the existing lab compose network
-  (`agent-spend_default` by default) so the reporter reaches the API
+  (`token-tracker_default` by default) so the reporter reaches the API
   at `http://api:8080/v1/traces` over service DNS — no host port needed.
 - Identity flows entirely through the JWT minted via `/api/me/tokens`.
   The reporter sets `agent.user.id` from `git config user.email` inside
@@ -131,8 +131,8 @@ re-run the scenario — no scenario-image rebuild needed.
 
 | Symptom                                                        | Likely cause                                            |
 |----------------------------------------------------------------|---------------------------------------------------------|
-| `image agent-spend-scenario:latest missing`                    | Run `scripts/scenario build` first.                     |
-| `network agent-spend_default missing`                          | Run `make lab` to bring up the lab compose stack.       |
+| `image token-tracker-scenario:latest missing`                    | Run `scripts/scenario build` first.                     |
+| `network token-tracker_default missing`                          | Run `make lab` to bring up the lab compose stack.       |
 | `reporter dist missing at /…/pi-usage-reporter/dist`           | Set `REPORTER_DIST` or build the reporter package.      |
 | `mint failed for <email>`                                      | The user hasn't logged into the SPA yet (no users row). |
 | `ZAI_API_KEY not set`                                          | Add it to env or to `~/.pi/agent/auth.json` `.zai.key`. |

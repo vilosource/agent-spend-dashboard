@@ -3,7 +3,7 @@
 # The "real data" smoke. Drives a real `pi -p` turn against z.ai's GLM
 # inside the scenario container, with pi-usage-reporter loaded as a pi
 # extension pointing at the lab API. Asserts that a row lands in
-# agent_spend_logs scoped to the scenario user.
+# usage_log scoped to the scenario user.
 #
 # What this proves end-to-end:
 #   - Token mgmt API (0.3.10) issues a usable bearer.
@@ -18,7 +18,7 @@
 #   once so the row exists in users (lab bootstrap rule). If not, run
 #   `make lab` then visit http://localhost:7080 and log in.
 
-intent "real pi+zai turn lands a real row in agent_spend_logs"
+intent "real pi+zai turn lands a real row in usage_log"
 
 prepare() {
   scenario_use_user "lab-admin@example.invalid"

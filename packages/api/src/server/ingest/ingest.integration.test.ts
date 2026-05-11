@@ -67,7 +67,7 @@ describe("POST /v1/traces — OTLP ingest", () => {
 			if (!env) throw new Error("test environment failed to set up");
 			const e = env;
 
-			const beforeCount = await countSpendLogs(e);
+			const beforeCount = await countUsageLog(e);
 			const payload = makePayload([
 				makeSpan({ harnessName: "pi", model: "glm-4.6", inputTokens: 100, outputTokens: 50 }),
 				makeSpan({ harnessName: "pi", model: "glm-4.6", inputTokens: 200, outputTokens: 75 }),
@@ -91,7 +91,7 @@ describe("POST /v1/traces — OTLP ingest", () => {
 			expect(res.status).toBe(200);
 			expect(await res.json()).toEqual({ partialSuccess: {} });
 
-			const afterCount = await countSpendLogs(e);
+			const afterCount = await countUsageLog(e);
 			expect(afterCount - beforeCount).toBe(3);
 
 			const rows = await fetchRecentRows(e, USER_EMAIL, 3);
@@ -259,10 +259,10 @@ async function startIdp(): Promise<Idp> {
 	return { issuer: `http://127.0.0.1:${addr().port}`, server, privateKey };
 }
 
-async function countSpendLogs(e: Env): Promise<number> {
+async function countUsageLog(e: Env): Promise<number> {
 	const pool = new Pool({ connectionString: e.databaseUrl });
 	try {
-		const r = await pool.query<{ c: string }>("SELECT COUNT(*)::text AS c FROM agent_spend_logs");
+		const r = await pool.query<{ c: string }>("SELECT COUNT(*)::text AS c FROM usage_log");
 		return Number.parseInt(r.rows[0]?.c ?? "0", 10);
 	} finally {
 		await pool.end();
@@ -272,7 +272,7 @@ async function countSpendLogs(e: Env): Promise<number> {
 async function countByUserId(e: Env, userId: string): Promise<number> {
 	const pool = new Pool({ connectionString: e.databaseUrl });
 	try {
-		const r = await pool.query<{ c: string }>("SELECT COUNT(*)::text AS c FROM agent_spend_logs WHERE user_id = $1", [
+		const r = await pool.query<{ c: string }>("SELECT COUNT(*)::text AS c FROM usage_log WHERE user_id = $1", [
 			userId,
 		]);
 		return Number.parseInt(r.rows[0]?.c ?? "0", 10);
@@ -289,7 +289,7 @@ async function fetchRecentRows(
 	const pool = new Pool({ connectionString: e.databaseUrl });
 	try {
 		const r = await pool.query(
-			"SELECT user_id, harness_name, model, input_tokens FROM agent_spend_logs WHERE user_id = $1 ORDER BY id DESC LIMIT $2",
+			"SELECT user_id, harness_name, model, input_tokens FROM usage_log WHERE user_id = $1 ORDER BY id DESC LIMIT $2",
 			[userId, limit],
 		);
 		return r.rows;

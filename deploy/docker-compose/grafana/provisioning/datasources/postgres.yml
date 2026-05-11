@@ -1,12 +1,12 @@
-# Provisioned data source: agent_spend Postgres.
+# Provisioned data source: token_tracker Postgres.
 # Per docs/strategy/local-lab-STRATEGY.md §3.1, Grafana is the ops/exploration
 # surface; Postgres is the source of truth.
 
 apiVersion: 1
 
 datasources:
-  - name: agent_spend
-    uid: agent_spend
+  - name: token_tracker
+    uid: token_tracker
     type: postgres
     access: proxy
     url: postgres:5432

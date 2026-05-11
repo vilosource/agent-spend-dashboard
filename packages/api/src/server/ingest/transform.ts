@@ -1,5 +1,5 @@
 /**
- * OTLP/JSON traces payload → agent_spend_logs row(s).
+ * OTLP/JSON traces payload → usage_log row(s).
  *
  * Pure transform — no IO, no env reads. Mirrors the canonical Python
  * implementation in lab/bridge/bridge.py exactly so the bridge regression
@@ -55,10 +55,10 @@ export interface OtlpTracesPayload {
 export type CostEstimation = "metered" | "subscription" | "unreported";
 
 /**
- * Shape that maps 1:1 to the agent_spend_logs INSERT in db.ts. Names
+ * Shape that maps 1:1 to the usage_log INSERT in db.ts. Names
  * are camelCase here (TS convention); the SQL layer remaps them.
  */
-export interface SpendLogRow {
+export interface UsageLogRow {
 	readonly ts: Date;
 	readonly userId: string;
 	readonly team: string | null;
@@ -161,7 +161,7 @@ export function spanToRow(
 	span: OtlpSpan,
 	resourceAttrs: Record<string, AttrValue>,
 	authenticatedUserId: string,
-): SpendLogRow | null {
+): UsageLogRow | null {
 	const a: Record<string, AttrValue> = { ...resourceAttrs, ...attrsToDict(span.attributes) };
 	const harnessName = asString(a["agent.harness.name"]);
 	if (!harnessName) return null;
@@ -244,13 +244,13 @@ function metaFields(a: Record<string, AttrValue>) {
  * for the caller to log / return in the OTLP partialSuccess shape.
  */
 export interface TransformResult {
-	readonly rows: SpendLogRow[];
+	readonly rows: UsageLogRow[];
 	readonly seen: number;
 	readonly skipped: number;
 }
 
 export function payloadToRows(payload: OtlpTracesPayload, authenticatedUserId: string): TransformResult {
-	const rows: SpendLogRow[] = [];
+	const rows: UsageLogRow[] = [];
 	let seen = 0;
 	let skipped = 0;
 	for (const { span, resourceAttrs } of iterSpans(payload)) {

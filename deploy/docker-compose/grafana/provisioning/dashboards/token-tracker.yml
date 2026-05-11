@@ -4,9 +4,9 @@
 apiVersion: 1
 
 providers:
-  - name: agent-spend
+  - name: token-tracker
     orgId: 1
-    folder: 'Agent Spend'
+    folder: 'Token Tracker'
     type: file
     disableDeletion: false
     updateIntervalSeconds: 30

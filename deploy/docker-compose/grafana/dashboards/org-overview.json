@@ -1,7 +1,7 @@
 {
-   "title": "Agent Spend — Org Overview",
-   "uid": "agent-spend-org-overview",
-   "tags": ["agent-spend", "org"],
+   "title": "Token Tracker — Org Overview",
+   "uid": "token-tracker-org-overview",
+   "tags": ["token-tracker", "org"],
    "timezone": "browser",
    "schemaVersion": 39,
    "version": 1,
@@ -13,8 +13,8 @@
             "name": "environment",
             "label": "Environment",
             "type": "query",
-            "datasource": { "type": "postgres", "uid": "agent_spend" },
-            "query": "SELECT DISTINCT environment FROM agent_spend_logs ORDER BY 1",
+            "datasource": { "type": "postgres", "uid": "token_tracker" },
+            "query": "SELECT DISTINCT environment FROM usage_log ORDER BY 1",
             "refresh": 1,
             "current": { "text": "All", "value": "$__all" },
             "includeAll": true,
@@ -24,8 +24,8 @@
             "name": "harness",
             "label": "Harness",
             "type": "query",
-            "datasource": { "type": "postgres", "uid": "agent_spend" },
-            "query": "SELECT DISTINCT harness_name FROM agent_spend_logs ORDER BY 1",
+            "datasource": { "type": "postgres", "uid": "token_tracker" },
+            "query": "SELECT DISTINCT harness_name FROM usage_log ORDER BY 1",
             "refresh": 1,
             "current": { "text": "All", "value": "$__all" },
             "includeAll": true,
@@ -39,13 +39,13 @@
          "type": "stat",
          "title": "Total cost (selected window)",
          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "unit": "currencyUSD", "decimals": 2 }
          },
          "targets": [
             {
-               "rawSql": "SELECT SUM(cost_total_usd) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
+               "rawSql": "SELECT SUM(cost_total_usd) AS value FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
                "format": "table"
             }
          ]
@@ -55,11 +55,11 @@
          "type": "stat",
          "title": "Total turns",
          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
          "targets": [
             {
-               "rawSql": "SELECT COUNT(*) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
+               "rawSql": "SELECT COUNT(*) AS value FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
                "format": "table"
             }
          ]
@@ -69,11 +69,11 @@
          "type": "stat",
          "title": "Active developers",
          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
          "targets": [
             {
-               "rawSql": "SELECT COUNT(DISTINCT user_id) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
+               "rawSql": "SELECT COUNT(DISTINCT user_id) AS value FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
                "format": "table"
             }
          ]
@@ -83,11 +83,11 @@
          "type": "stat",
          "title": "Total tokens",
          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "short", "decimals": 1 } },
          "targets": [
             {
-               "rawSql": "SELECT SUM(input_tokens + output_tokens) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
+               "rawSql": "SELECT SUM(input_tokens + output_tokens) AS value FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness)",
                "format": "table"
             }
          ]
@@ -97,13 +97,13 @@
          "type": "timeseries",
          "title": "Daily cost by provider",
          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" } } }
          },
          "targets": [
             {
-               "rawSql": "SELECT date_trunc('day', ts) AS time, provider AS metric, SUM(cost_total_usd) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1, 2 ORDER BY 1",
+               "rawSql": "SELECT date_trunc('day', ts) AS time, provider AS metric, SUM(cost_total_usd) AS value FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1, 2 ORDER BY 1",
                "format": "time_series"
             }
          ]
@@ -113,14 +113,14 @@
          "type": "piechart",
          "title": "Model mix (turns)",
          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "options": {
             "displayLabels": ["name", "percent"],
             "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }
          },
          "targets": [
             {
-               "rawSql": "SELECT model AS metric, COUNT(*) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1 ORDER BY 2 DESC",
+               "rawSql": "SELECT model AS metric, COUNT(*) AS value FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1 ORDER BY 2 DESC",
                "format": "table"
             }
          ]
@@ -130,7 +130,7 @@
          "type": "table",
          "title": "Top 10 spenders",
          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "custom": { "align": "auto" } },
             "overrides": [
@@ -142,7 +142,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT user_id, team, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1, 2 ORDER BY cost_usd DESC LIMIT 10",
+               "rawSql": "SELECT user_id, team, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1, 2 ORDER BY cost_usd DESC LIMIT 10",
                "format": "table"
             }
          ]
@@ -152,7 +152,7 @@
          "type": "table",
          "title": "Metered vs subscription split",
          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "custom": { "align": "auto" } },
             "overrides": [
@@ -162,7 +162,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT cost_estimation, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM agent_spend_logs WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1 ORDER BY turns DESC",
+               "rawSql": "SELECT cost_estimation, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM usage_log WHERE $__timeFilter(ts) AND environment IN ($environment) AND harness_name IN ($harness) GROUP BY 1 ORDER BY turns DESC",
                "format": "table"
             }
          ]

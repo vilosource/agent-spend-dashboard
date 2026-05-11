@@ -1,6 +1,6 @@
 # Bridge — OTLP/JSONL → Postgres
 
-A small Python script that reads spans from the OTel Collector's `file/spans` exporter output and inserts them into `agent_spend_logs`.
+A small Python script that reads spans from the OTel Collector's `file/spans` exporter output and inserts them into `usage_log`.
 
 ## Why a Python script and not a Collector exporter
 
@@ -17,7 +17,7 @@ pip install 'psycopg[binary]'
 # queries (which goes through `docker compose exec`).
 python3 bridge.py \
    --spans /var/log/otel/spans.jsonl \
-   --dsn 'postgresql://<user>:<password>@postgres:5432/agent_spend'
+   --dsn 'postgresql://<user>:<password>@postgres:5432/token_tracker'
 ```
 
 It tails the JSONL file, parses each span, and inserts a row per assistant turn (skipping spans without `agent.user.id`).

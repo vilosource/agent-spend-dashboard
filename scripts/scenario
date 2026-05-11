@@ -2,7 +2,7 @@
 #
 # scripts/scenario — operator harness for lab/scenario/* end-to-end tests.
 #
-# Inspired by mykb's scripts/spike/kb-spike, scaled down for agent-spend's
+# Inspired by mykb's scripts/spike/kb-spike, scaled down for token-tracker's
 # narrower contract (single image, single network, single sink). The
 # scenarios under lab/scenario/scenarios/*.sh own their own
 # prepare/stimulate/observe phases and use the helpers this script
@@ -21,7 +21,7 @@
 #   REPORTER_DIST   path to pi-usage-reporter dist (default: ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist)
 #   ZAI_API_KEY     z.ai key for the LLM call (default: read from ${HOME}/.pi/agent/auth.json)
 #   LAB_API         lab API URL on host       (default: http://localhost:7080)
-#   LAB_NETWORK     compose network name      (default: agent-spend_default)
+#   LAB_NETWORK     compose network name      (default: token-tracker_default)
 #   LAB_JWT_SECRET  HS256 signer for forged session JWTs (default: lab-jwt-secret-not-for-production)
 #
 set -euo pipefail
@@ -36,10 +36,10 @@ RUNS_DIR="${SCENARIO_DIR}/runs"
 # ── env defaults ────────────────────────────────────────────────────────
 REPORTER_DIST="${REPORTER_DIST:-${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist}"
 LAB_API="${LAB_API:-http://localhost:7080}"
-LAB_NETWORK="${LAB_NETWORK:-agent-spend_default}"
+LAB_NETWORK="${LAB_NETWORK:-token-tracker_default}"
 LAB_JWT_SECRET="${LAB_JWT_SECRET:-lab-jwt-secret-not-for-production}"
-PG_CONTAINER="${PG_CONTAINER:-agent-spend-postgres-1}"
-SCENARIO_IMAGE="${SCENARIO_IMAGE:-agent-spend-scenario:latest}"
+PG_CONTAINER="${PG_CONTAINER:-token-tracker-postgres-1}"
+SCENARIO_IMAGE="${SCENARIO_IMAGE:-token-tracker-scenario:latest}"
 
 # ZAI key: prefer env, else extract from ~/.pi/agent/auth.json (operator's
 # real config). The container needs it to make the actual LLM call.
@@ -94,7 +94,7 @@ cmd_mint() {
   session_jwt="$(_forge_session_jwt "$email" "$role")"
 
   local body
-  body="$(curl -sS -b "agent_spend_session=$session_jwt" \
+  body="$(curl -sS -b "token_tracker_session=$session_jwt" \
                 -X POST "$LAB_API/api/me/tokens" \
                 -H 'content-type: application/json' \
                 -d "{\"label\":\"$label\"}")"
@@ -193,10 +193,10 @@ case "${1:-}" in
   run)    shift; cmd_run   "$@" ;;
   ""|-h|--help|help)
     cat <<USAGE
-scripts/scenario — agent-spend lab scenario harness
+scripts/scenario — token-tracker lab scenario harness
 
 Usage:
-  scenario build              build agent-spend-scenario:latest
+  scenario build              build token-tracker-scenario:latest
   scenario list               list scenarios under lab/scenario/scenarios/
   scenario run <name>         run one scenario; prints PASS/FAIL
   scenario mint <email>       mint a per-machine bearer token for <email>
@@ -204,7 +204,7 @@ Usage:
 Env knobs (with defaults):
   REPORTER_DIST   ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist
   LAB_API         http://localhost:7080
-  LAB_NETWORK     agent-spend_default
+  LAB_NETWORK     token-tracker_default
   LAB_JWT_SECRET  lab-jwt-secret-not-for-production
 USAGE
     ;;

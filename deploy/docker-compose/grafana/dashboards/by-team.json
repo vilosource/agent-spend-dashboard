@@ -1,7 +1,7 @@
 {
-   "title": "Agent Spend — By Team",
-   "uid": "agent-spend-by-team",
-   "tags": ["agent-spend", "team"],
+   "title": "Token Tracker — By Team",
+   "uid": "token-tracker-by-team",
+   "tags": ["token-tracker", "team"],
    "timezone": "browser",
    "schemaVersion": 39,
    "version": 1,
@@ -13,8 +13,8 @@
             "name": "team",
             "label": "Team",
             "type": "query",
-            "datasource": { "type": "postgres", "uid": "agent_spend" },
-            "query": "SELECT DISTINCT team FROM agent_spend_logs WHERE team IS NOT NULL ORDER BY 1",
+            "datasource": { "type": "postgres", "uid": "token_tracker" },
+            "query": "SELECT DISTINCT team FROM usage_log WHERE team IS NOT NULL ORDER BY 1",
             "refresh": 1,
             "current": { "text": "All", "value": "$__all" },
             "includeAll": true,
@@ -28,13 +28,13 @@
          "type": "barchart",
          "title": "Cost by team (selected window)",
          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "unit": "currencyUSD", "decimals": 2 }
          },
          "targets": [
             {
-               "rawSql": "SELECT team, SUM(cost_total_usd) AS cost FROM agent_spend_logs WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY team ORDER BY cost DESC",
+               "rawSql": "SELECT team, SUM(cost_total_usd) AS cost FROM usage_log WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY team ORDER BY cost DESC",
                "format": "table"
             }
          ]
@@ -44,11 +44,11 @@
          "type": "barchart",
          "title": "Active developers by team",
          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
          "targets": [
             {
-               "rawSql": "SELECT team, COUNT(DISTINCT user_id) AS developers FROM agent_spend_logs WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY team ORDER BY developers DESC",
+               "rawSql": "SELECT team, COUNT(DISTINCT user_id) AS developers FROM usage_log WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY team ORDER BY developers DESC",
                "format": "table"
             }
          ]
@@ -58,13 +58,13 @@
          "type": "timeseries",
          "title": "Daily cost — per team",
          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "line", "stacking": { "mode": "none" } } }
          },
          "targets": [
             {
-               "rawSql": "SELECT date_trunc('day', ts) AS time, team AS metric, SUM(cost_total_usd) AS value FROM agent_spend_logs WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY 1, 2 ORDER BY 1",
+               "rawSql": "SELECT date_trunc('day', ts) AS time, team AS metric, SUM(cost_total_usd) AS value FROM usage_log WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY 1, 2 ORDER BY 1",
                "format": "time_series"
             }
          ]
@@ -74,7 +74,7 @@
          "type": "table",
          "title": "Per-developer breakdown (within selected teams)",
          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "custom": { "align": "auto" } },
             "overrides": [
@@ -84,7 +84,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT user_id, team, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM agent_spend_logs WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY 1, 2 ORDER BY cost_usd DESC",
+               "rawSql": "SELECT user_id, team, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM usage_log WHERE $__timeFilter(ts) AND team IN ($team) GROUP BY 1, 2 ORDER BY cost_usd DESC",
                "format": "table"
             }
          ]

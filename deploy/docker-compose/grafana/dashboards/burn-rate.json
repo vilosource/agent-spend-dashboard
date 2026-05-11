@@ -1,7 +1,7 @@
 {
-   "title": "Agent Spend — Burn Rate",
-   "uid": "agent-spend-burn-rate",
-   "tags": ["agent-spend", "ops"],
+   "title": "Token Tracker — Burn Rate",
+   "uid": "token-tracker-burn-rate",
+   "tags": ["token-tracker", "ops"],
    "timezone": "browser",
    "schemaVersion": 39,
    "version": 2,
@@ -13,7 +13,7 @@
          "type": "stat",
          "title": "Cost — last hour",
          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": {
                "unit": "currencyUSD",
@@ -30,7 +30,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT COALESCE(SUM(cost_total_usd), 0) AS value FROM agent_spend_logs WHERE ts > now() - interval '1 hour'",
+               "rawSql": "SELECT COALESCE(SUM(cost_total_usd), 0) AS value FROM usage_log WHERE ts > now() - interval '1 hour'",
                "format": "table"
             }
          ]
@@ -40,11 +40,11 @@
          "type": "stat",
          "title": "Cost — last 24 h",
          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2 } },
          "targets": [
             {
-               "rawSql": "SELECT COALESCE(SUM(cost_total_usd), 0) AS value FROM agent_spend_logs WHERE ts > now() - interval '24 hours'",
+               "rawSql": "SELECT COALESCE(SUM(cost_total_usd), 0) AS value FROM usage_log WHERE ts > now() - interval '24 hours'",
                "format": "table"
             }
          ]
@@ -54,11 +54,11 @@
          "type": "stat",
          "title": "Active sessions (last hour)",
          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
          "targets": [
             {
-               "rawSql": "SELECT COUNT(DISTINCT session_id) AS value FROM agent_spend_logs WHERE ts > now() - interval '1 hour'",
+               "rawSql": "SELECT COUNT(DISTINCT session_id) AS value FROM usage_log WHERE ts > now() - interval '1 hour'",
                "format": "table"
             }
          ]
@@ -68,11 +68,11 @@
          "type": "stat",
          "title": "Active developers (last hour)",
          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
          "targets": [
             {
-               "rawSql": "SELECT COUNT(DISTINCT user_id) AS value FROM agent_spend_logs WHERE ts > now() - interval '1 hour'",
+               "rawSql": "SELECT COUNT(DISTINCT user_id) AS value FROM usage_log WHERE ts > now() - interval '1 hour'",
                "format": "table"
             }
          ]
@@ -82,13 +82,13 @@
          "type": "timeseries",
          "title": "Cost rate (USD per 5 min)",
          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "line", "fillOpacity": 20 } }
          },
          "targets": [
             {
-               "rawSql": "SELECT $__timeGroup(ts, '5m') AS time, SUM(cost_total_usd) AS \"5min cost\" FROM agent_spend_logs WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1",
+               "rawSql": "SELECT $__timeGroup(ts, '5m') AS time, SUM(cost_total_usd) AS \"5min cost\" FROM usage_log WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1",
                "format": "time_series"
             }
          ]
@@ -98,7 +98,7 @@
          "type": "table",
          "title": "Top spenders — last hour (potential runaways)",
          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "custom": { "align": "auto" } },
             "overrides": [
@@ -108,7 +108,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT user_id, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM agent_spend_logs WHERE ts > now() - interval '1 hour' GROUP BY 1 ORDER BY cost_usd DESC LIMIT 10",
+               "rawSql": "SELECT user_id, COUNT(*) AS turns, SUM(input_tokens + output_tokens) AS tokens, SUM(cost_total_usd) AS cost_usd FROM usage_log WHERE ts > now() - interval '1 hour' GROUP BY 1 ORDER BY cost_usd DESC LIMIT 10",
                "format": "table"
             }
          ]
@@ -118,7 +118,7 @@
          "type": "table",
          "title": "Long-running sessions (>1 h, last 24 h)",
          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-         "datasource": { "type": "postgres", "uid": "agent_spend" },
+         "datasource": { "type": "postgres", "uid": "token_tracker" },
          "fieldConfig": {
             "defaults": { "custom": { "align": "auto" } },
             "overrides": [
@@ -130,7 +130,7 @@
          },
          "targets": [
             {
-               "rawSql": "SELECT session_id, user_id, COUNT(*) AS turns, EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts)))/60 AS duration_min, SUM(cost_total_usd) AS cost_usd FROM agent_spend_logs WHERE ts > now() - interval '24 hours' GROUP BY session_id, user_id HAVING EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts))) > 3600 ORDER BY duration_min DESC LIMIT 10",
+               "rawSql": "SELECT session_id, user_id, COUNT(*) AS turns, EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts)))/60 AS duration_min, SUM(cost_total_usd) AS cost_usd FROM usage_log WHERE ts > now() - interval '24 hours' GROUP BY session_id, user_id HAVING EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts))) > 3600 ORDER BY duration_min DESC LIMIT 10",
                "format": "table"
             }
          ]

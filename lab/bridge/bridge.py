@@ -4,7 +4,7 @@ Bridge — OTLP/JSONL → Postgres.
 
 Reads the OTel Collector's `file/spans` JSONL output, extracts agent.* + gen_ai.*
 attributes from each span, and inserts a row per assistant turn into
-agent_spend_logs.
+usage_log.
 
 Spans without `agent.user.id` or `agent.harness.name` are skipped (they would
 have been filtered by the Collector's filter/sanity processor; this is defense
@@ -31,7 +31,7 @@ except ImportError:
 
 
 INSERT_SQL = """
-INSERT INTO agent_spend_logs (
+INSERT INTO usage_log (
     ts, user_id, team, machine_id, session_id,
     workspace_cwd, workspace_repo, workspace_branch, workspace_is_ci,
     provider, api, model, response_model,
