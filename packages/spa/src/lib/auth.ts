@@ -33,6 +33,7 @@
 
 import {
 	type AccountInfo,
+	type AuthenticationResult,
 	BrowserCacheLocation,
 	InteractionRequiredAuthError,
 	ProtocolMode,
@@ -101,7 +102,16 @@ let initialized = false;
 export async function initializeAuth(): Promise<void> {
 	if (!isAuthConfigured || initialized) return;
 	await msal.initialize();
-	const redirectResult = await msal.handleRedirectPromise();
+	// handleRedirectPromise rejects if the IdP redirected back with an error
+	// response (consent declined, a config mismatch, a stale/used code, …).
+	// That must never crash the whole app — swallow it and fall through to the
+	// sign-in CTA; the user can retry the login from a clean state.
+	let redirectResult: AuthenticationResult | null = null;
+	try {
+		redirectResult = await msal.handleRedirectPromise();
+	} catch (err) {
+		console.warn("MSAL: handleRedirectPromise failed; treating as not-signed-in.", err);
+	}
 	if (redirectResult?.account) {
 		msal.setActiveAccount(redirectResult.account);
 	} else if (!msal.getActiveAccount()) {
