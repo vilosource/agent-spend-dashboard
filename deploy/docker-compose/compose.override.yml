@@ -14,11 +14,11 @@ name: token-tracker
 #
 #   Tier 1 — always exposed (real user-facing surfaces):
 #     7000  Grafana       (browser)
-#     7080  API           (browser, and after phase 0.3.7 the OTLP target for host pi)
+#     7080  API           (browser; also the OTLP /v1/traces target for host pi)
+#     7019  lab IdP       (browser, for the SPA's MSAL flow; the api container reaches the same URL via extra_hosts)
 #
-#   Tier 2 — transitional, retires at phase 0.3.8 (bridge sunset):
-#     7018  OTel Collector OTLP/HTTP   (only consumer is host pi until /v1/traces lands on the API)
-#     7019  Dex (lab IdP)              (browser-facing; the api container reaches the same URL via extra_hosts)
+#   Tier 2 — lab-only regression fixture for the standard OTel pipeline:
+#     7018  OTel Collector OTLP/HTTP   (used by the seeder + ad-hoc pipeline tests; the API's /v1/traces is the real path)
 #
 #   Tier 3 — not exposed; Compose-internal only:
 #     Postgres            → use `make psql` (which does docker compose exec)
@@ -111,22 +111,30 @@ services:
 
    # API service — host port 7080. Container internal port stays at 8080.
    api:
+      # The SPA is built into this image at `vite build` time, so the SPA's
+      # MSAL config is baked here via build args (production deployments pass
+      # their own). VITE_TOKEN_TRACKER_API_SCOPE is whatever the IdP maps to
+      # an access token with aud=token-tracker-api; the lab IdP ignores the
+      # scope's specifics and just stamps that aud.
+      build:
+         args:
+            VITE_TOKEN_TRACKER_AUTHORITY: http://idp.localhost:7019
+            VITE_TOKEN_TRACKER_CLIENT_ID: token-tracker-spa
+            VITE_TOKEN_TRACKER_API_SCOPE: api://token-tracker-api/access_as_user
+            VITE_TOKEN_TRACKER_REDIRECT_URI: http://localhost:7080
       environment:
-         # PUBLIC_URL is what the BROWSER uses to reach this API — so it
-         # must match the host-side mapping (7080), not the container-internal
-         # port (8080). The OIDC redirect_uri is built from PUBLIC_URL and
-         # must match exactly what's registered in dex-config.yaml.
+         # PUBLIC_URL is what the BROWSER uses to reach this API — it must match
+         # the host-side mapping (7080), not the container-internal port (8080).
          PUBLIC_URL: http://localhost:7080
-         # Lab values for the OIDC client. Production deployments set these
-         # via the deploying organization's secret store / IdP.
-         AGENT_SPEND_JWT_SECRET: lab-jwt-secret-not-for-production
-         AGENT_SPEND_OIDC_ISSUER_URL: http://idp.localhost:7019
-         AGENT_SPEND_OIDC_CLIENT_ID: token-tracker
-         AGENT_SPEND_OIDC_CLIENT_SECRET: lab-secret
-      # idp.localhost resolves to loopback on the browser (RFC 6761) and
-      # via host-gateway here so the api container reaches the same Dex
-      # the browser does. OIDC issuer-claim verification requires the
-      # browser-side and server-side URLs to match exactly.
+         # Lab IdP config (the server is a pure resource server — no client
+         # secret, no JWT-signing secret). Production deployments set these via
+         # the deploying organization's secret store / IdP.
+         TOKEN_TRACKER_OIDC_ISSUER_URL: http://idp.localhost:7019
+         TOKEN_TRACKER_OIDC_CLIENT_ID: token-tracker-api
+      # idp.localhost resolves to loopback on the browser (RFC 6761) and via
+      # host-gateway here, so the api container reaches the same IdP URL the
+      # browser does — the issuer claim must match what the client used to
+      # fetch the discovery doc.
       extra_hosts:
          - "idp.localhost:host-gateway"
       ports:
@@ -135,27 +143,25 @@ services:
          idp:
             condition: service_healthy
 
-   # Dex — mock OIDC IdP for the lab, per
-   # docs/strategy/authentication-STRATEGY.md §5.
-   #
-   # Two static users (lab-admin@example.invalid, lab-user@example.invalid),
-   # password "lab" for both. The first one to log in becomes role=admin
-   # via the api's first-user bootstrap; subsequent logins become
-   # role=developer.
+   # Lab OIDC IdP — a tiny purpose-built provider (lab/idp/server.mjs, zero
+   # npm deps). Replaces Dex: Dex's static-password connector can't emit the
+   # app-role claims the API reads. Three hardcoded identities — lab-admin
+   # (TokenTracker.Admin), lab-user (TokenTracker.User), lab-viewer
+   # (TokenTracker.Viewer); no passwords. See lab/idp/README.md.
    idp:
-      image: ghcr.io/dexidp/dex:v2.41.0
+      build: ../../lab/idp
       restart: unless-stopped
-      command: ["dex", "serve", "/etc/dex/config.yaml"]
-      volumes:
-         - ../../lab/idp/dex-config.yaml:/etc/dex/config.yaml:ro
+      environment:
+         ISSUER: http://idp.localhost:7019
+         API_AUDIENCE: token-tracker-api
       ports:
          - "7019:5556"
       healthcheck:
-         test: ["CMD", "wget", "-qO-", "http://localhost:5556/healthz"]
+         test: ["CMD", "node", "-e", "fetch('http://localhost:5556/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
          interval: 5s
          timeout: 3s
          retries: 10
-         start_period: 5s
+         start_period: 3s
 
 # Lab-only volumes. otel-spans is the JSONL pipe between the Collector's
 # file exporter and the bridge — only used when the regression-test

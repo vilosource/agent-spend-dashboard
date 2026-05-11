@@ -19,18 +19,19 @@ _log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$SCENARIO_RUN_
 
 # ── token / user setup (called in prepare) ──────────────────────────────
 
-# scenario_use_user <email> [label]
+# scenario_use_user <email>
 #
-# Forge a session JWT for the user and mint a fresh per-machine bearer
-# via /api/me/tokens. Stashes the bearer in $SCENARIO_TOKEN and the
-# email in $SCENARIO_USER_EMAIL so scenarios don't re-state them.
+# Get a fresh access token for the given lab IdP identity (one of
+# lab-admin@example.invalid / lab-user@example.invalid / lab-viewer@example.invalid).
+# Stashes it in $SCENARIO_TOKEN and the email in $SCENARIO_USER_EMAIL so
+# scenarios don't re-state them. The reporter sends it as Authorization:
+# Bearer; the API verifies it like any other IdP token.
 scenario_use_user() {
   local email="${1:?scenario_use_user: missing email}"
-  local label="${2:-${SCENARIO_NAME}-${SCENARIO_RUN_ID##*-}}"
   SCENARIO_USER_EMAIL="$email"
-  SCENARIO_TOKEN="$(scripts/scenario mint "$email" "$label")"
+  SCENARIO_TOKEN="$(scripts/scenario mint "$email")"
   [[ -n "$SCENARIO_TOKEN" ]] || { _log "FAIL: token mint returned empty"; SCENARIO_FAIL_COUNT=$((SCENARIO_FAIL_COUNT+1)); return 1; }
-  _log "minted bearer for $email (label=$label, jwt=${#SCENARIO_TOKEN}b)"
+  _log "minted bearer for $email (token=${#SCENARIO_TOKEN}b)"
 }
 
 # scenario_pre_count

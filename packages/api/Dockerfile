@@ -23,6 +23,19 @@ COPY packages/_template ./packages/_template
 COPY packages/api ./packages/api
 COPY packages/spa ./packages/spa
 
+# The SPA's MSAL config is baked at vite-build time (Vite inlines VITE_*
+# env vars). Pass these as --build-arg from the deploy's compose/CI; if
+# unset, the SPA renders an "auth not configured" state instead of
+# attempting a broken login. (See packages/spa/src/lib/auth.ts.)
+ARG VITE_TOKEN_TRACKER_AUTHORITY=
+ARG VITE_TOKEN_TRACKER_CLIENT_ID=
+ARG VITE_TOKEN_TRACKER_API_SCOPE=
+ARG VITE_TOKEN_TRACKER_REDIRECT_URI=
+ENV VITE_TOKEN_TRACKER_AUTHORITY=${VITE_TOKEN_TRACKER_AUTHORITY} \
+    VITE_TOKEN_TRACKER_CLIENT_ID=${VITE_TOKEN_TRACKER_CLIENT_ID} \
+    VITE_TOKEN_TRACKER_API_SCOPE=${VITE_TOKEN_TRACKER_API_SCOPE} \
+    VITE_TOKEN_TRACKER_REDIRECT_URI=${VITE_TOKEN_TRACKER_REDIRECT_URI}
+
 # Build the SPA first so its bundle lands in packages/api/dist/spa/
 # before the API build runs. The order doesn't strictly matter — both
 # write into different subtrees of dist/ — but keeping it deterministic

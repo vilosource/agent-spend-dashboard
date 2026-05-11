@@ -52,7 +52,7 @@ sources it into a subshell where helpers (`scenario_use_user`,
 intent "real pi+zai turn lands a real row in usage_log"
 
 prepare() {
-   scenario_use_user "lab-admin@example.invalid"   # forge JWT, mint bearer
+   scenario_use_user "lab-admin@example.invalid"   # get an IdP access token
    scenario_pre_count                              # snapshot row count
 }
 
@@ -73,7 +73,7 @@ Phases default to no-ops, so a scenario can omit any of them.
 
 | Helper                                  | Use in     | What it does                                                           |
 |-----------------------------------------|------------|------------------------------------------------------------------------|
-| `scenario_use_user <email> [label]`     | prepare    | Forge session JWT, POST `/api/me/tokens`, stash bearer + email         |
+| `scenario_use_user <email>`             | prepare    | Get a lab IdP access token (`scripts/scenario mint`), stash it + email |
 | `scenario_pre_count`                    | prepare    | Snapshot current row count for the scenario user                       |
 | `scenario_run_pi <prompt> [args...]`    | stimulate  | `docker run` the scenario image; reporter posts to lab API on flush    |
 | `assert_new_rows <min>`                 | observe    | Polls Postgres up to ~10 s for `>= min` new rows                       |
@@ -85,25 +85,24 @@ Phases default to no-ops, so a scenario can omit any of them.
 - The container joins the existing lab compose network
   (`token-tracker_default` by default) so the reporter reaches the API
   at `http://api:8080/v1/traces` over service DNS — no host port needed.
-- Identity flows entirely through the JWT minted via `/api/me/tokens`.
-  The reporter sets `agent.user.id` from `git config user.email` inside
-  the container, but the API drops that and uses JWT claims (D8/D13).
+- Identity flows entirely through the access token's claims. The reporter
+  sends `Authorization: Bearer <token>` and may set `agent.user.id` on the
+  span, but the API ignores that and uses the verified token's email.
 - LLM provider keys are passed in via env from the harness:
   - `ZAI_API_KEY` — default; falls back to `~/.pi/agent/auth.json`'s `.zai.key`
   - `ANTHROPIC_API_KEY`, `COPILOT_GITHUB_TOKEN` — set as needed and
     pass `PI_PROVIDER=...` when invoking.
 
-## Bypassing Dex for token issuance
+## Token issuance
 
-Mint scenarios don't run a real OIDC flow. `scripts/scenario mint` forges a
-session JWT signed with `LAB_JWT_SECRET` (the lab default
-`lab-jwt-secret-not-for-production`) and POSTs `/api/me/tokens` as that user.
-The user must already exist in the `users` table — log in via the SPA at least
-once, or rely on the bootstrap rule (first login becomes admin).
-
-This shortcut is valid in the lab only. Production deployments use a
-real secret and real Dex/Entra/etc; the same `/api/me/tokens` route is
-authenticated, the only thing that changes is who the cookie comes from.
+`scripts/scenario mint <email>` asks the lab IdP (`lab/idp/`, host port `7019`)
+for a fresh access token for one of its hardcoded identities
+(`lab-admin@example.invalid` → `TokenTracker.Admin`, `lab-user@…` → `.User`,
+`lab-viewer@…` → `.Viewer`). The token is RS256-signed with the IdP's key and
+carries the right `aud` + `roles` claim; the API verifies it like any other
+bearer (there is no separate `/api/me/tokens` step any more — the server is a
+pure resource server). In production the SPA gets equivalent tokens from the
+deploying org's IdP via MSAL.
 
 ## Reporter dist source
 
@@ -134,7 +133,7 @@ re-run the scenario — no scenario-image rebuild needed.
 | `image token-tracker-scenario:latest missing`                    | Run `scripts/scenario build` first.                     |
 | `network token-tracker_default missing`                          | Run `make lab` to bring up the lab compose stack.       |
 | `reporter dist missing at /…/pi-usage-reporter/dist`           | Set `REPORTER_DIST` or build the reporter package.      |
-| `mint failed for <email>`                                      | The user hasn't logged into the SPA yet (no users row). |
+| `mint failed for '<who>'`                                      | The lab IdP isn't up — run `make lab` (or check `$LAB_IDP`). |
 | `ZAI_API_KEY not set`                                          | Add it to env or to `~/.pi/agent/auth.json` `.zai.key`. |
 | `pi exit=non-zero`                                             | See `lab/scenario/runs/<id>/pi-stderr`.                 |
 | `expected >= 1 new rows, got 0`                                | Reporter didn't flush; check `pi-stdout` for warnings.  |

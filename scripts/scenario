@@ -12,17 +12,19 @@
 #   scenario build               build the lab/scenario image
 #   scenario list                list available scenarios
 #   scenario run <name>          run one scenario by basename (with or without .sh)
-#   scenario mint <email>        mint a fresh per-machine bearer token for <email>
-#                                via /api/me/tokens (uses lab Dex bypass:
-#                                forges a session JWT signed with the lab
-#                                JWT secret, then POSTs as that user)
+#   scenario mint <email|role>   print a fresh IdP access token for the given lab
+#                                identity (e.g. `lab-user@example.invalid` or
+#                                just `admin`), via the lab IdP's /lab/token
+#                                shortcut. Pass it to the reporter as
+#                                PI_USAGE_TOKEN (the API verifies it as a normal
+#                                bearer).
 #
 # Environment knobs:
-#   REPORTER_DIST   path to pi-usage-reporter dist (default: ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist)
+#   REPORTER_DIST   path to the pi-side reporter dist (default: ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist)
 #   ZAI_API_KEY     z.ai key for the LLM call (default: read from ${HOME}/.pi/agent/auth.json)
 #   LAB_API         lab API URL on host       (default: http://localhost:7080)
+#   LAB_IDP         lab IdP URL on host       (default: http://localhost:7019)
 #   LAB_NETWORK     compose network name      (default: token-tracker_default)
-#   LAB_JWT_SECRET  HS256 signer for forged session JWTs (default: lab-jwt-secret-not-for-production)
 #
 set -euo pipefail
 
@@ -36,8 +38,8 @@ RUNS_DIR="${SCENARIO_DIR}/runs"
 # ── env defaults ────────────────────────────────────────────────────────
 REPORTER_DIST="${REPORTER_DIST:-${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist}"
 LAB_API="${LAB_API:-http://localhost:7080}"
+LAB_IDP="${LAB_IDP:-http://localhost:7019}"
 LAB_NETWORK="${LAB_NETWORK:-token-tracker_default}"
-LAB_JWT_SECRET="${LAB_JWT_SECRET:-lab-jwt-secret-not-for-production}"
 PG_CONTAINER="${PG_CONTAINER:-token-tracker-postgres-1}"
 SCENARIO_IMAGE="${SCENARIO_IMAGE:-token-tracker-scenario:latest}"
 
@@ -81,43 +83,19 @@ cmd_list() {
 }
 
 # ── verb: mint ──────────────────────────────────────────────────────────
-# Forge a session JWT for <email> with the lab secret, then POST a fresh
-# /api/me/tokens. Bypasses Dex entirely. The user must already exist in
-# the users table — log in via the SPA at least once first.
+# Ask the lab IdP for a fresh access token for one of its hardcoded lab
+# identities (lab-admin / lab-user / lab-viewer; pass the email or just the
+# bare role). The token is RS256-signed with the IdP's key and carries the
+# right aud + roles claim — the API verifies it like any other bearer.
 cmd_mint() {
-  local email="${1:?usage: scenario mint <email>}"
-  local label="${2:-scenario-$(date -u +%Y%m%d-%H%M%S)}"
-  local role="developer"
-  if [[ "$email" == *admin* ]]; then role="admin"; fi
-
-  local session_jwt
-  session_jwt="$(_forge_session_jwt "$email" "$role")"
-
+  local who="${1:?usage: scenario mint <email|admin|user|viewer>}"
   local body
-  body="$(curl -sS -b "token_tracker_session=$session_jwt" \
-                -X POST "$LAB_API/api/me/tokens" \
-                -H 'content-type: application/json' \
-                -d "{\"label\":\"$label\"}")"
-
-  if ! echo "$body" | grep -q '"token"'; then
+  body="$(curl -sS -X POST "$LAB_IDP/lab/token" -d "user=$who")"
+  if ! echo "$body" | grep -q '"access_token"'; then
     echo "$body" >&2
-    _die "mint failed for $email"
+    _die "mint failed for '$who' (is the lab IdP up at $LAB_IDP? try \`make lab\`)"
   fi
-  echo "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])'
-}
-
-_forge_session_jwt() {
-  local email="$1" role="$2"
-  node --input-type=module -e "
-import { SignJWT } from 'jose';
-const jwt = await new SignJWT({ email: '$email', name: '$email'.split('@')[0], role: '$role' })
-  .setProtectedHeader({ alg: 'HS256' })
-  .setSubject('$email')
-  .setIssuedAt()
-  .setExpirationTime('5m')
-  .sign(new TextEncoder().encode('$LAB_JWT_SECRET'));
-process.stdout.write(jwt);
-" 2>/dev/null || _die "failed to forge session JWT (is jose available via npm root -g?)"
+  echo "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])'
 }
 
 # ── verb: run ───────────────────────────────────────────────────────────
@@ -149,7 +127,7 @@ cmd_run() {
   export SCENARIO_RUN_ID="$run_id"
   export SCENARIO_RUN_DIR="$run_dir"
   export SCENARIO_IMAGE
-  export REPORTER_DIST LAB_API LAB_NETWORK LAB_JWT_SECRET PG_CONTAINER
+  export REPORTER_DIST LAB_API LAB_IDP LAB_NETWORK PG_CONTAINER
   export ZAI_API_KEY="$zai_key"
 
   # Default no-ops so a scenario can omit any phase.
@@ -199,13 +177,14 @@ Usage:
   scenario build              build token-tracker-scenario:latest
   scenario list               list scenarios under lab/scenario/scenarios/
   scenario run <name>         run one scenario; prints PASS/FAIL
-  scenario mint <email>       mint a per-machine bearer token for <email>
+  scenario mint <email|role>  print a lab IdP access token (lab-admin / lab-user
+                              / lab-viewer; or just admin|user|viewer)
 
 Env knobs (with defaults):
   REPORTER_DIST   ${HOME}/GitHub/pi-extensions/packages/pi-usage-reporter/dist
   LAB_API         http://localhost:7080
+  LAB_IDP         http://localhost:7019
   LAB_NETWORK     token-tracker_default
-  LAB_JWT_SECRET  lab-jwt-secret-not-for-production
 USAGE
     ;;
   *) _die "unknown verb: $1 (try: scenario help)" ;;

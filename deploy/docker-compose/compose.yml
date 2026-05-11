@@ -35,13 +35,14 @@ services:
    # deployments run only postgres + api + grafana from this file.
 
    api:
-      # Token Tracker API + SPA + OTLP ingest (per docs/design/api-and-spa-DESIGN.md).
-      # Phase 0.3.3 — /health, /, and /auth/{login,callback,logout} are
-      # implemented; /api/*, /v1/traces land in subsequent phases.
-      #
-      # The AGENT_SPEND_* prefix on app-specific env vars is an explicit
-      # convention so deploying organizations don't have to namespace
-      # generic-sounding names like JWT_SECRET against their other apps.
+      # Token Tracker — Express API + bundled SPA + OTLP /v1/traces ingest, one
+      # port. A pure OAuth 2.0 resource server: it verifies the IdP's access
+      # token and issues nothing itself, so the only auth config it needs is
+      # the issuer URL + its own client id (the expected token `aud`). The
+      # TOKEN_TRACKER_* prefix keeps these from colliding with generic names
+      # other apps on the same host might define. The bundled SPA's MSAL config
+      # is baked at `vite build` time via build args (see packages/api/Dockerfile);
+      # the lab passes lab values in compose.override.yml.
       build:
          context: ../..
          dockerfile: packages/api/Dockerfile
@@ -50,10 +51,8 @@ services:
          PORT: 8080
          PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
          DATABASE_URL: postgresql://${POSTGRES_USER:-token_tracker}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-token_tracker}
-         AGENT_SPEND_JWT_SECRET: ${AGENT_SPEND_JWT_SECRET:?set AGENT_SPEND_JWT_SECRET in .env}
-         AGENT_SPEND_OIDC_ISSUER_URL: ${AGENT_SPEND_OIDC_ISSUER_URL:?set AGENT_SPEND_OIDC_ISSUER_URL in .env}
-         AGENT_SPEND_OIDC_CLIENT_ID: ${AGENT_SPEND_OIDC_CLIENT_ID:?set AGENT_SPEND_OIDC_CLIENT_ID in .env}
-         AGENT_SPEND_OIDC_CLIENT_SECRET: ${AGENT_SPEND_OIDC_CLIENT_SECRET:?set AGENT_SPEND_OIDC_CLIENT_SECRET in .env}
+         TOKEN_TRACKER_OIDC_ISSUER_URL: ${TOKEN_TRACKER_OIDC_ISSUER_URL:?set TOKEN_TRACKER_OIDC_ISSUER_URL in .env}
+         TOKEN_TRACKER_OIDC_CLIENT_ID: ${TOKEN_TRACKER_OIDC_CLIENT_ID:?set TOKEN_TRACKER_OIDC_CLIENT_ID in .env}
       depends_on:
          postgres:
             condition: service_healthy
