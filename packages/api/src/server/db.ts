@@ -48,7 +48,28 @@ export interface Db {
 	 * `?cursor=` query param (or null for the first page).
 	 */
 	fetchSessions(input: FetchSessionsInput): Promise<SessionRow[]>;
+	/**
+	 * The model_prices reference table: every priced model with its list
+	 * rate (USD per 1,000,000 tokens), plus the most recent `updated_at`
+	 * across the table (when the prices were last synced). Ordered by model.
+	 */
+	fetchModelPrices(): Promise<ModelPrices>;
 	close(): Promise<void>;
+}
+
+export interface ModelPrice {
+	readonly model: string;
+	readonly inputPerMtok: number;
+	readonly outputPerMtok: number;
+	readonly cacheReadPerMtok: number;
+	readonly cacheWritePerMtok: number;
+	readonly source: string;
+}
+
+export interface ModelPrices {
+	/** Max(updated_at) across the table as ISO 8601, or null if empty. */
+	readonly updatedAt: string | null;
+	readonly items: readonly ModelPrice[];
 }
 
 export interface UsageTotals {
@@ -380,6 +401,37 @@ export function createDb(databaseUrl: string): Db {
 			}
 			const sql = `INSERT INTO usage_log (${USAGE_LOG_COLUMNS.join(",")}) VALUES ${placeholders.join(",")}`;
 			await pool.query(sql, values);
+		},
+
+		async fetchModelPrices() {
+			const { rows } = await pool.query<{
+				model: string;
+				input_per_mtok: string;
+				output_per_mtok: string;
+				cache_read_per_mtok: string;
+				cache_write_per_mtok: string;
+				source: string;
+				updated_at: Date;
+			}>(
+				`SELECT model, input_per_mtok, output_per_mtok,
+				        cache_read_per_mtok, cache_write_per_mtok, source, updated_at
+				   FROM model_prices
+				  ORDER BY model`,
+			);
+			const updatedAt = rows.reduce<Date | null>((max, r) => {
+				return max === null || r.updated_at > max ? r.updated_at : max;
+			}, null);
+			return {
+				updatedAt: updatedAt ? updatedAt.toISOString() : null,
+				items: rows.map((r) => ({
+					model: r.model,
+					inputPerMtok: Number.parseFloat(r.input_per_mtok),
+					outputPerMtok: Number.parseFloat(r.output_per_mtok),
+					cacheReadPerMtok: Number.parseFloat(r.cache_read_per_mtok),
+					cacheWritePerMtok: Number.parseFloat(r.cache_write_per_mtok),
+					source: r.source,
+				})),
+			};
 		},
 
 		async close() {

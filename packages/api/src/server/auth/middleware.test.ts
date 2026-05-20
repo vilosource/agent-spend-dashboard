@@ -45,6 +45,9 @@ function makeDb(opts: { failUpsert?: boolean } = {}): RecordingDb {
 		async fetchSessions() {
 			return [];
 		},
+		async fetchModelPrices() {
+			return { updatedAt: null, items: [] };
+		},
 		async close() {},
 	};
 }

@@ -110,6 +110,9 @@ $effect(() => {
 					<option value="90">Last 90 days</option>
 				</select>
 			</label>
+			<a href="/prices" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
+				Prices
+			</a>
 			<button type="button" onclick={logout} class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">
 				Log out
 			</button>

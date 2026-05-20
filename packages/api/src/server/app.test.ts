@@ -34,6 +34,9 @@ function makeFakeDb(): Db {
 		async fetchSessions() {
 			return [];
 		},
+		async fetchModelPrices() {
+			return { updatedAt: null, items: [] };
+		},
 		async close() {},
 	};
 }

@@ -26,6 +26,7 @@ import type { Verifier } from "./auth/idp.js";
 import type { Db } from "./db.js";
 import { ingestRoutes } from "./ingest/routes.js";
 import { meRoutes } from "./me/routes.js";
+import { pricesRoutes } from "./prices/routes.js";
 
 export interface AppDeps {
 	readonly publicUrl: string;
@@ -68,6 +69,7 @@ export function createApp(deps: AppDeps): Express {
 
 	app.use(ingestRoutes({ db: deps.db, verifier: deps.verifier }));
 	app.use("/api", meRoutes({ db: deps.db, verifier: deps.verifier }));
+	app.use("/api", pricesRoutes({ db: deps.db, verifier: deps.verifier }));
 
 	if (existsSync(SPA_DIR)) {
 		// SPA bundle is present — serve it. Static assets first; any

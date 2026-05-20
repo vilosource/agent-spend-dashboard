@@ -68,6 +68,22 @@ export interface SessionItem {
 	readonly models: readonly string[];
 }
 
+export interface ModelPrice {
+	readonly model: string;
+	readonly inputPerMtok: number;
+	readonly outputPerMtok: number;
+	readonly cacheReadPerMtok: number;
+	readonly cacheWritePerMtok: number;
+	readonly source: string;
+}
+
+export interface PricesResponse {
+	/** When prices were last synced (ISO 8601), or null if empty. */
+	readonly updatedAt: string | null;
+	readonly count: number;
+	readonly items: readonly ModelPrice[];
+}
+
 export interface SessionsResponse {
 	readonly from: string;
 	readonly to: string;
@@ -128,6 +144,10 @@ export function fetchSessions(opts?: {
 	return getJson<SessionsResponse>(`/api/me/sessions${qs ? `?${qs}` : ""}`);
 }
 
+export function fetchPrices(): Promise<PricesResponse> {
+	return getJson<PricesResponse>("/api/prices");
+}
+
 /** Begin the IdP login redirect (handled entirely client-side by MSAL). */
 export function redirectToLogin(): void {
 	login();
@@ -141,6 +161,12 @@ export function fmtUsd(n: number): string {
 
 export function fmtInt(n: number): string {
 	return new Intl.NumberFormat("en-US").format(n);
+}
+
+/** Price per 1M tokens, e.g. `$5.00`. `$0` is shown as `—` (free/subscription). */
+export function fmtRate(n: number): string {
+	if (n === 0) return "—";
+	return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(n);
 }
 
 export function fmtDateTime(iso: string): string {

@@ -332,6 +332,34 @@ describe("GET /api/me/sessions — pagination + scoping", () => {
 	});
 });
 
+describe("GET /api/prices — model price reference", () => {
+	it("returns the seeded prices + updatedAt", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/prices`, { headers: { authorization: `Bearer ${env.aliceToken}` } });
+		expect(r.status).toBe(200);
+		const body = (await r.json()) as {
+			updatedAt: string | null;
+			count: number;
+			items: { model: string; inputPerMtok: number; outputPerMtok: number }[];
+		};
+		expect(body.count).toBeGreaterThan(0);
+		expect(body.count).toBe(body.items.length);
+		expect(typeof body.updatedAt).toBe("string"); // table is seeded → has a timestamp
+		const opus = body.items.find((m) => m.model === "claude-opus-4-7");
+		expect(opus?.inputPerMtok).toBe(5);
+		expect(opus?.outputPerMtok).toBe(25);
+		// sorted by model
+		const models = body.items.map((m) => m.model);
+		expect([...models].sort()).toEqual(models);
+	});
+
+	it("requires auth", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/prices`);
+		expect(r.status).toBe(401);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // env setup + IdP fixture + seed helpers
 // ---------------------------------------------------------------------------
