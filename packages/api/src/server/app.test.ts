@@ -15,7 +15,15 @@ function makeFakeDb(): Db {
 		async upsertUser() {},
 		async insertUsageLog() {},
 		async fetchUsageTotals() {
-			return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
+			return {
+				costUsd: 0,
+				estimatedCostUsd: 0,
+				turns: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			};
 		},
 		async fetchUsageByDay() {
 			return [];

@@ -52,7 +52,14 @@ export interface Db {
 }
 
 export interface UsageTotals {
+	/** Actually-billed cost (SUM cost_total_usd). $0 for subscription usage. */
 	readonly costUsd: number;
+	/**
+	 * List-price cost: metered rows use their billed cost; subscription
+	 * rows are priced at the model's list rate (model_prices). Equals
+	 * costUsd when there is no subscription usage in range.
+	 */
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
@@ -63,6 +70,7 @@ export interface UsageTotals {
 export interface UsageByDay {
 	readonly day: string; // ISO date (YYYY-MM-DD)
 	readonly costUsd: number;
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
@@ -72,6 +80,7 @@ export interface UsageByModel {
 	readonly model: string;
 	readonly provider: string;
 	readonly costUsd: number;
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 }
 
@@ -89,9 +98,26 @@ export interface SessionRow {
 	readonly firstTs: Date;
 	readonly lastTs: Date;
 	readonly costUsd: number;
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 	readonly models: readonly string[];
 }
+
+/**
+ * Effective per-row cost used by the rollups. Metered rows keep the
+ * provider-reported cost; subscription rows (provider bills flat-rate and
+ * reports $0, tagged cost_estimation='subscription') are priced at the
+ * model's list rate from model_prices (USD per 1,000,000 tokens). A model
+ * with no price row falls back to 0 — no estimate is possible.
+ *
+ * Callers must `LEFT JOIN model_prices mp ON mp.model = usage_log.model`.
+ */
+const ESTIMATED_COST_USD = `CASE WHEN usage_log.cost_estimation = 'subscription'
+	THEN ( usage_log.input_tokens * COALESCE(mp.input_per_mtok, 0)
+	     + usage_log.output_tokens * COALESCE(mp.output_per_mtok, 0)
+	     + usage_log.cache_read    * COALESCE(mp.cache_read_per_mtok, 0)
+	     + usage_log.cache_write   * COALESCE(mp.cache_write_per_mtok, 0) ) / 1000000.0
+	ELSE usage_log.cost_total_usd END`;
 
 const USAGE_LOG_COLUMNS = [
 	"ts",
@@ -177,26 +203,39 @@ export function createDb(databaseUrl: string): Db {
 			// rows returns NULL, so we COALESCE to 0 and parse after.
 			const { rows: result } = await pool.query<{
 				cost_usd: string;
+				estimated_cost_usd: string;
 				turns: string;
 				input_tokens: string;
 				output_tokens: string;
 				cache_read: string;
 				cache_write: string;
 			}>(
-				`SELECT COALESCE(SUM(cost_total_usd), 0)::text AS cost_usd,
-				        COUNT(*)::text                          AS turns,
-				        COALESCE(SUM(input_tokens), 0)::text    AS input_tokens,
-				        COALESCE(SUM(output_tokens), 0)::text   AS output_tokens,
-				        COALESCE(SUM(cache_read), 0)::text      AS cache_read,
-				        COALESCE(SUM(cache_write), 0)::text     AS cache_write
+				`SELECT COALESCE(SUM(cost_total_usd), 0)::text       AS cost_usd,
+				        COALESCE(SUM(${ESTIMATED_COST_USD}), 0)::text AS estimated_cost_usd,
+				        COUNT(*)::text                                AS turns,
+				        COALESCE(SUM(input_tokens), 0)::text          AS input_tokens,
+				        COALESCE(SUM(output_tokens), 0)::text         AS output_tokens,
+				        COALESCE(SUM(cache_read), 0)::text            AS cache_read,
+				        COALESCE(SUM(cache_write), 0)::text           AS cache_write
 				   FROM usage_log
+				   LEFT JOIN model_prices mp ON mp.model = usage_log.model
 				  WHERE ${where}`,
 				[...params],
 			);
 			const r = result[0];
-			if (!r) return { costUsd: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
+			if (!r)
+				return {
+					costUsd: 0,
+					estimatedCostUsd: 0,
+					turns: 0,
+					inputTokens: 0,
+					outputTokens: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+				};
 			return {
 				costUsd: Number.parseFloat(r.cost_usd),
+				estimatedCostUsd: Number.parseFloat(r.estimated_cost_usd),
 				turns: Number.parseInt(r.turns, 10),
 				inputTokens: Number.parseInt(r.input_tokens, 10),
 				outputTokens: Number.parseInt(r.output_tokens, 10),
@@ -209,16 +248,19 @@ export function createDb(databaseUrl: string): Db {
 			const { rows: result } = await pool.query<{
 				day: string;
 				cost_usd: string;
+				estimated_cost_usd: string;
 				turns: string;
 				input_tokens: string;
 				output_tokens: string;
 			}>(
 				`SELECT to_char(date_trunc('day', ts), 'YYYY-MM-DD')      AS day,
 				        COALESCE(SUM(cost_total_usd), 0)::text            AS cost_usd,
+				        COALESCE(SUM(${ESTIMATED_COST_USD}), 0)::text     AS estimated_cost_usd,
 				        COUNT(*)::text                                    AS turns,
 				        COALESCE(SUM(input_tokens), 0)::text              AS input_tokens,
 				        COALESCE(SUM(output_tokens), 0)::text             AS output_tokens
 				   FROM usage_log
+				   LEFT JOIN model_prices mp ON mp.model = usage_log.model
 				  WHERE ${where}
 				  GROUP BY 1
 				  ORDER BY 1`,
@@ -227,6 +269,7 @@ export function createDb(databaseUrl: string): Db {
 			return result.map((r) => ({
 				day: r.day,
 				costUsd: Number.parseFloat(r.cost_usd),
+				estimatedCostUsd: Number.parseFloat(r.estimated_cost_usd),
 				turns: Number.parseInt(r.turns, 10),
 				inputTokens: Number.parseInt(r.input_tokens, 10),
 				outputTokens: Number.parseInt(r.output_tokens, 10),
@@ -238,22 +281,26 @@ export function createDb(databaseUrl: string): Db {
 				model: string;
 				provider: string;
 				cost_usd: string;
+				estimated_cost_usd: string;
 				turns: string;
 			}>(
-				`SELECT model,
-				        provider,
-				        COALESCE(SUM(cost_total_usd), 0)::text AS cost_usd,
-				        COUNT(*)::text                         AS turns
+				`SELECT usage_log.model                              AS model,
+				        usage_log.provider                           AS provider,
+				        COALESCE(SUM(cost_total_usd), 0)::text       AS cost_usd,
+				        COALESCE(SUM(${ESTIMATED_COST_USD}), 0)::text AS estimated_cost_usd,
+				        COUNT(*)::text                                AS turns
 				   FROM usage_log
+				   LEFT JOIN model_prices mp ON mp.model = usage_log.model
 				  WHERE ${where}
-				  GROUP BY model, provider
-				  ORDER BY SUM(cost_total_usd) DESC NULLS LAST`,
+				  GROUP BY usage_log.model, usage_log.provider
+				  ORDER BY SUM(${ESTIMATED_COST_USD}) DESC NULLS LAST`,
 				[...params],
 			);
 			return result.map((r) => ({
 				model: r.model,
 				provider: r.provider,
 				costUsd: Number.parseFloat(r.cost_usd),
+				estimatedCostUsd: Number.parseFloat(r.estimated_cost_usd),
 				turns: Number.parseInt(r.turns, 10),
 			}));
 		},
@@ -275,13 +322,15 @@ export function createDb(databaseUrl: string): Db {
 			const limitPlaceholder = `$${params.length + cursorParams.length + 1}`;
 
 			const sql = `
-				SELECT session_id::text                        AS session_id,
-				       MIN(ts)                                  AS first_ts,
-				       MAX(ts)                                  AS last_ts,
-				       COALESCE(SUM(cost_total_usd), 0)::text   AS cost_usd,
-				       COUNT(*)::text                           AS turns,
-				       array_agg(DISTINCT model)                AS models
+				SELECT session_id::text                            AS session_id,
+				       MIN(ts)                                      AS first_ts,
+				       MAX(ts)                                      AS last_ts,
+				       COALESCE(SUM(cost_total_usd), 0)::text       AS cost_usd,
+				       COALESCE(SUM(${ESTIMATED_COST_USD}), 0)::text AS estimated_cost_usd,
+				       COUNT(*)::text                               AS turns,
+				       array_agg(DISTINCT usage_log.model)          AS models
 				  FROM usage_log
+				  LEFT JOIN model_prices mp ON mp.model = usage_log.model
 				 WHERE ${where}
 				 GROUP BY session_id
 				 ${cursorFragment}
@@ -293,6 +342,7 @@ export function createDb(databaseUrl: string): Db {
 				first_ts: Date;
 				last_ts: Date;
 				cost_usd: string;
+				estimated_cost_usd: string;
 				turns: string;
 				models: string[];
 			}>(sql, [...params, ...cursorParams, limit]);
@@ -301,6 +351,7 @@ export function createDb(databaseUrl: string): Db {
 				firstTs: r.first_ts,
 				lastTs: r.last_ts,
 				costUsd: Number.parseFloat(r.cost_usd),
+				estimatedCostUsd: Number.parseFloat(r.estimated_cost_usd),
 				turns: Number.parseInt(r.turns, 10),
 				models: r.models,
 			}));

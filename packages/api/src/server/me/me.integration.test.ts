@@ -29,6 +29,7 @@ const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "../../..
 const SCHEMA_FILES = [
 	`${REPO_ROOT}/deploy/docker-compose/postgres/init/001_schema.sql`,
 	`${REPO_ROOT}/deploy/docker-compose/postgres/init/002_auth.sql`,
+	`${REPO_ROOT}/deploy/docker-compose/postgres/init/003_model_prices.sql`,
 ];
 const PG_IMAGE = "postgres:16-alpine";
 const TEST_TIMEOUT = 60_000;
@@ -158,6 +159,90 @@ describe("GET /api/me/usage — rowScope enforcement", () => {
 		if (!env) throw new Error("env failed");
 		const r = await fetch(`${env.baseUrl}/api/me/usage`);
 		expect(r.status).toBe(401);
+	});
+
+	it("metered rows: estimatedCostUsd equals billed costUsd", async () => {
+		if (!env) throw new Error("env failed");
+		// Alice's seeded rows are all cost_estimation='metered' (the column
+		// default), so the list-price estimate must collapse to the billed
+		// cost — the CASE takes the ELSE branch for metered rows.
+		const r = await fetch(`${env.baseUrl}/api/me/usage`, { headers: { authorization: `Bearer ${env.aliceToken}` } });
+		const body = (await r.json()) as { totals: { costUsd: number; estimatedCostUsd: number } };
+		expect(body.totals.costUsd).toBeGreaterThan(0);
+		expect(body.totals.estimatedCostUsd).toBeCloseTo(body.totals.costUsd, 6);
+	});
+});
+
+describe("GET /api/me/usage — estimated list-price cost for subscription usage", () => {
+	// A far-past, self-contained window so these rows never collide with the
+	// recent rowScope fixtures. Two priced claude-opus-4-7 subscription rows
+	// (1M input @ $5/Mtok = $5; 1M output @ $25/Mtok = $25) plus one
+	// subscription row on a model with no price entry (estimate must be $0).
+	const FROM = "2000-06-01T00:00:00Z";
+	const TO = "2000-06-30T23:59:59Z";
+	const TS = "2000-06-15T00:00:00Z";
+	const SESSION = "0000ace0-0000-0000-0000-00000000a17e";
+
+	beforeAll(async () => {
+		if (!env) throw new Error("env failed");
+		const pool = new Pool({ connectionString: env.databaseUrl });
+		try {
+			const ins = (model: string, inTok: number, outTok: number) =>
+				pool.query(
+					`INSERT INTO usage_log (
+						ts, user_id, machine_id, session_id, provider, api, model,
+						harness_name, input_tokens, output_tokens, cache_read, cache_write,
+						cost_input_usd, cost_output_usd, cost_total_usd, cost_estimation
+					) VALUES ($1,$2,'11111111-1111-1111-1111-111111111111',$3,'github-copilot',
+						'anthropic-messages',$4,'pi',$5,$6,0,0,0,0,0,'subscription')`,
+					[TS, ALICE, SESSION, model, inTok, outTok],
+				);
+			await ins("claude-opus-4-7", 1_000_000, 0); // -> $5 estimated
+			await ins("claude-opus-4-7", 0, 1_000_000); // -> $25 estimated
+			await ins("no-such-model-xyz", 1_000_000, 0); // unpriced -> $0 estimated
+		} finally {
+			await pool.end();
+		}
+	}, TEST_TIMEOUT);
+
+	it("totals: billed is $0, estimated is the list-price sum", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/usage?from=${FROM}&to=${TO}`, {
+			headers: { authorization: `Bearer ${env.aliceToken}` },
+		});
+		expect(r.status).toBe(200);
+		const body = (await r.json()) as { totals: { turns: number; costUsd: number; estimatedCostUsd: number } };
+		expect(body.totals.turns).toBe(3);
+		expect(body.totals.costUsd).toBe(0); // subscription bills flat-rate
+		expect(body.totals.estimatedCostUsd).toBeCloseTo(30, 6); // 5 + 25 + 0
+	});
+
+	it("byModel: priced model is estimated, unpriced model falls back to $0", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/usage?from=${FROM}&to=${TO}`, {
+			headers: { authorization: `Bearer ${env.aliceToken}` },
+		});
+		const body = (await r.json()) as {
+			byModel: { model: string; costUsd: number; estimatedCostUsd: number }[];
+		};
+		const opus = body.byModel.find((m) => m.model === "claude-opus-4-7");
+		const unknown = body.byModel.find((m) => m.model === "no-such-model-xyz");
+		expect(opus?.costUsd).toBe(0);
+		expect(opus?.estimatedCostUsd).toBeCloseTo(30, 6);
+		expect(unknown?.estimatedCostUsd).toBe(0);
+	});
+
+	it("sessions: the subscription session reports billed $0, estimated list price", async () => {
+		if (!env) throw new Error("env failed");
+		const r = await fetch(`${env.baseUrl}/api/me/sessions?from=${FROM}&to=${TO}`, {
+			headers: { authorization: `Bearer ${env.aliceToken}` },
+		});
+		const body = (await r.json()) as {
+			items: { sessionId: string; costUsd: number; estimatedCostUsd: number }[];
+		};
+		const s = body.items.find((x) => x.sessionId === SESSION);
+		expect(s?.costUsd).toBe(0);
+		expect(s?.estimatedCostUsd).toBeCloseTo(30, 6);
 	});
 });
 

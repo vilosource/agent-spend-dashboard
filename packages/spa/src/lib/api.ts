@@ -22,7 +22,10 @@ export interface Identity {
 }
 
 export interface UsageTotals {
+	/** Actually-billed cost. $0 for subscription (flat-rate) usage. */
 	readonly costUsd: number;
+	/** List-price cost; for subscription usage this is the estimate. */
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
@@ -33,6 +36,7 @@ export interface UsageTotals {
 export interface UsageByDay {
 	readonly day: string;
 	readonly costUsd: number;
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
@@ -42,6 +46,7 @@ export interface UsageByModel {
 	readonly model: string;
 	readonly provider: string;
 	readonly costUsd: number;
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 }
 
@@ -58,6 +63,7 @@ export interface SessionItem {
 	readonly firstTs: string;
 	readonly lastTs: string;
 	readonly costUsd: number;
+	readonly estimatedCostUsd: number;
 	readonly turns: number;
 	readonly models: readonly string[];
 }

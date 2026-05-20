@@ -136,10 +136,22 @@ $effect(() => {
 		{@const data = pageState.data}
 
 		<!-- KPI cards -->
-		<section class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+		<section class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<article class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
-				<p class="text-xs uppercase tracking-wide text-slate-500">Cost</p>
+				<p class="text-xs uppercase tracking-wide text-slate-500">Billed</p>
 				<p class="mt-2 text-3xl font-semibold">{fmtUsd(data.usage.totals.costUsd)}</p>
+				<p class="mt-1 text-xs text-slate-500">actually charged</p>
+			</article>
+			<article class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+				<p class="text-xs uppercase tracking-wide text-slate-500">Estimated (list price)</p>
+				<p class="mt-2 text-3xl font-semibold">{fmtUsd(data.usage.totals.estimatedCostUsd)}</p>
+				<p class="mt-1 text-xs text-slate-500">
+					{#if data.usage.totals.estimatedCostUsd > data.usage.totals.costUsd}
+						incl. subscription usage priced at model list rate
+					{:else}
+						no subscription usage in range
+					{/if}
+				</p>
 			</article>
 			<article class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
 				<p class="text-xs uppercase tracking-wide text-slate-500">Turns</p>
@@ -189,7 +201,8 @@ $effect(() => {
 								<th class="py-2 pr-4">Started</th>
 								<th class="py-2 pr-4">Duration</th>
 								<th class="py-2 pr-4">Turns</th>
-								<th class="py-2 pr-4">Cost</th>
+								<th class="py-2 pr-4">Billed</th>
+								<th class="py-2 pr-4">Est. (list price)</th>
 								<th class="py-2">Models</th>
 							</tr>
 						</thead>
@@ -200,6 +213,7 @@ $effect(() => {
 									<td class="py-2 pr-4">{fmtDuration(s.firstTs, s.lastTs)}</td>
 									<td class="py-2 pr-4">{fmtInt(s.turns)}</td>
 									<td class="py-2 pr-4">{fmtUsd(s.costUsd)}</td>
+									<td class="py-2 pr-4">{fmtUsd(s.estimatedCostUsd)}</td>
 									<td class="py-2">
 										<div class="flex flex-wrap gap-1">
 											{#each s.models as m (m)}

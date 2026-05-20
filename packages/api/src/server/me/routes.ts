@@ -118,6 +118,7 @@ async function handleSessions(req: Request, res: Response, deps: MeRouteDeps): P
 			firstTs: s.firstTs.toISOString(),
 			lastTs: s.lastTs.toISOString(),
 			costUsd: s.costUsd,
+			estimatedCostUsd: s.estimatedCostUsd,
 			turns: s.turns,
 			models: s.models,
 		})),
